@@ -24,7 +24,7 @@ const MODELS = {
 };
 
 const DEFAULT_CFG = {
-  model: 's9', bedW: 410, bedH: 400, sMax: 1000, framePower: 3, frameFeed: 3000, pointerPower: 10,
+  model: 's9', bedW: 410, bedH: 400, sMax: 1000, framePower: 3, frameFeed: 3000, pointerPower: 3,
   anchor: 'bl', absolute: false, air: false, overscan: 1, bidir: true, autoUnlock: true,
   transfer: 'upload', fileName: 'studio.nc', bleChunk: 20, rxBuffer: 120, jogStep: 10, jogFeed: 3000,
   pointer: false, pointerDX: 0, pointerDY: 0, hasHoming: false, burnPower: 200, frameRepeat: false,
@@ -584,12 +584,13 @@ function showWhereSheet() {
   const offTxt = `${(+c.pointerDX).toFixed(1)}, ${(+c.pointerDY).toFixed(1)} mm`;
   openSheet('Show where it will engrave',
     !m.connected ? h('div', { class: 'btns', style: { marginBottom: '8px' } }, btn('Connect first', () => { closeSheet(); setTab('machine'); }, 'primary')) : null,
-    row('Show with', seg([['laser', '🔴 Laser (weak beam)'], ['pointer', '➕ Red pointer']], c.pointer ? 'pointer' : 'laser', (v) => {
-      c.pointer = v === 'pointer'; saveCfg();
-      if (c.pointer && !c.pointerDX && !c.pointerDY) { closeSheet(); pointerCalibration(); return; }
-      editor.render(); showWhereSheet();
-    })),
-    c.pointer ? h('div', { class: 'hint' }, `Red pointer offset from the laser: ${offTxt}. `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); closeSheet(); pointerCalibration(); } }, 'Set it up')) : h('div', { class: 'hint' }, 'The laser runs at very low power (S' + c.framePower + '), so it shows a dot without burning.'),
+    c.pointer
+      ? h('div', { class: 'hint' }, `Using the separate red pointer (offset ${offTxt}). `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); c.pointer = false; saveCfg(); showWhereSheet(); } }, 'Use the blue laser instead'))
+      : h('div', {},
+        h('div', { class: 'hint' }, 'The blue laser moves around the design at very low power. It shows where the engraving goes without burning, like "Laser preview" in the SculpFun app.'),
+        row('Preview power', ...range(c.framePower, { min: 1, max: 30, step: 1, fmt: v => 'S' + v + ' (' + (v / c.sMax * 100).toFixed(1) + '%)', onChange: (v) => { c.framePower = v; c.pointerPower = v; saveCfg(); } })),
+        h('div', { class: 'hint' }, 'Too faint to see? Raise it a little. It starts burning at around S15–S30 depending on the material.'),
+      ),
     h('div', { class: 'btns', style: { margin: '8px 0' } },
       btn('⬚ Box around the design', () => runFrame(false), 'primary'),
       btn('✎ Trace the outline', () => runFrame(true)),
@@ -949,10 +950,11 @@ function settings() {
       row('Auto-unlock alarm', toggle(c.autoUnlock, (v) => { c.autoUnlock = v; saveCfg(); })),
       row('Homing', toggle(c.hasHoming, (v) => { c.hasHoming = v; saveCfg(); }), h('span', { class: 'hint' }, 'machine has limit switches ($H)')),
     ),
-    section('Red pointer',
-      row('Show where with', seg([['laser', 'Laser'], ['pointer', 'Red pointer']], c.pointer ? 'pointer' : 'laser', (v) => { c.pointer = v === 'pointer'; saveCfg(); })),
+    section('Show where',
+      row('Show with', seg([['laser', 'Blue laser (weak)'], ['pointer', 'Separate red pointer']], c.pointer ? 'pointer' : 'laser', (v) => { c.pointer = v === 'pointer'; saveCfg(); })),
       h('div', { class: 'grid2' }, field('Pointer offset X mm', n('pointerDX', { step: 0.1 })), field('Pointer offset Y mm', n('pointerDY', { step: 0.1 }))),
-      h('div', { class: 'btns' }, btn('Measure it…', () => { closeSheet(); pointerCalibration(); })),
+      h('div', { class: 'hint' }, 'Only for machines with an extra red pointer next to the laser. Most SculpFun models use the blue laser.'),
+      h('div', { class: 'btns' }, btn('Measure pointer offset…', () => { closeSheet(); pointerCalibration(); })),
     ),
     section('Frame & laser dot',
       h('div', { class: 'grid3' }, field('Frame power (S)', n('framePower', { min: 0, max: 100 })), field('Frame speed', n('frameFeed', { min: 100, max: 10000, step: 100 })), field('Dot power (S)', n('pointerPower', { min: 0, max: 100 }))),
