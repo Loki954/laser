@@ -1,0 +1,44 @@
+plugins { id 'com.android.application' }
+
+def nativeVersion = file('../NATIVE_VERSION').text.trim().toInteger()
+def vCode = (project.findProperty('versionCode') ?: '1').toString().toInteger()
+def vName = (project.findProperty('versionName') ?: '1.0.dev').toString()
+
+android {
+    namespace 'com.loki954.sculpfun'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.loki954.sculpfun'
+        minSdk 26
+        targetSdk 34
+        versionCode vCode
+        versionName vName
+        buildConfigField 'int', 'NATIVE_VERSION', "${nativeVersion}"
+        buildConfigField 'String', 'UPDATE_URL', '"https://github.com/Loki954/laser/releases/latest/download/update.json"'
+    }
+    signingConfigs {
+        release {
+            // provided by the CI workflow (never stored in the repository)
+            def ks = System.getenv('SIGNING_KEYSTORE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('SIGNING_PASSWORD')
+                keyAlias System.getenv('SIGNING_ALIAS') ?: 'sculpfun'
+                keyPassword System.getenv('SIGNING_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+    buildFeatures { buildConfig true }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    aaptOptions { noCompress 'html' }
+}

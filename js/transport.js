@@ -217,3 +217,37 @@ export class DemoTransport extends Base {
     }
   }
 }
+
+// ---------------- Android app: native Bluetooth Classic bridge (window.AndroidBT) ----------------
+const btListeners = new Set();
+if (typeof window !== 'undefined') window.__bt = (ev) => { btListeners.forEach(f => { try { f(ev); } catch (e) { console.error(e); } }); };
+export function onBtEvent(f) { btListeners.add(f); return () => btListeners.delete(f); }
+function b64encode(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+function b64decode(b) { const s = atob(b); const u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; }
+
+export class AndroidTransport extends Base {
+  constructor(address, label) { super(); this.address = address; this.name = label || 'Bluetooth'; this.wid = 0; this.wait = new Map(); }
+  static supported() { return typeof window !== 'undefined' && !!window.AndroidBT; }
+  connect() {
+    return new Promise((resolve, reject) => {
+      const to = setTimeout(() => { off(); reject(new Error('Connection timed out. Is the engraver on and nearby?')); }, 25000);
+      const off = onBtEvent((ev) => {
+        if (ev.type === 'open') { clearTimeout(to); this.connected = true; this.name = ev.name || this.name; resolve(); }
+        else if (ev.type === 'error' && !this.connected) { clearTimeout(to); off(); reject(new Error(ev.message)); }
+      });
+      this._off = onBtEvent((ev) => {
+        if (ev.type === 'data') this._data(b64decode(ev.b64));
+        else if (ev.type === 'written') { const w = this.wait.get(ev.id); if (w) { this.wait.delete(ev.id); w.res(); } }
+        else if (ev.type === 'writeError') { const w = this.wait.get(ev.id); if (w) { this.wait.delete(ev.id); w.rej(new Error(ev.message)); } }
+        else if (ev.type === 'closed') { if (this.connected) { this.connected = false; this.wait.forEach(w => w.rej(new Error('Disconnected'))); this.wait.clear(); this._off && this._off(); this._close(); } }
+      });
+      window.AndroidBT.connect(this.address);
+    });
+  }
+  write(d) {
+    const bytes = toBytes(d);
+    const id = ++this.wid;
+    return new Promise((res, rej) => { this.wait.set(id, { res, rej }); window.AndroidBT.write(id, b64encode(bytes)); });
+  }
+  async disconnect() { window.AndroidBT.close(); }
+}

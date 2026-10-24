@@ -1,0 +1,101 @@
+name: Android app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Bundle the app UI
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          npm install --prefix /tmp/esb esbuild@0.24.0 --no-audit --no-fund
+          python3 tools/build_single.py /tmp/esb/node_modules/.bin/esbuild android/app/src/main/assets/app.html --version "$VERSION"
+          echo "${{ github.run_number }}" > android/app/src/main/assets/web-version.txt
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # Signing key: uses repository secrets if you add them (SIGNING_KEYSTORE_B64, SIGNING_PASSWORD);
+      # otherwise a key is generated once and kept in the Actions cache so updates install over each other.
+      - name: Restore signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.signing
+          key: signing-key-v1
+
+      - name: Prepare signing key
+        env:
+          KS_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          mkdir -p ~/.signing
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > ~/.signing/release.jks
+            echo "$KS_PASS" > ~/.signing/pass
+          elif [ ! -f ~/.signing/release.jks ]; then
+            openssl rand -hex 16 > ~/.signing/pass
+            keytool -genkeypair -keystore ~/.signing/release.jks -alias sculpfun -keyalg RSA -keysize 2048 -validity 20000 \
+              -storepass "$(cat ~/.signing/pass)" -keypass "$(cat ~/.signing/pass)" -dname "CN=SculpFun Studio"
+          fi
+          echo "SIGNING_KEYSTORE=$HOME/.signing/release.jks" >> "$GITHUB_ENV"
+          echo "::add-mask::$(cat ~/.signing/pass)"
+          echo "SIGNING_PASSWORD=$(cat ~/.signing/pass)" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace -PversionCode=${{ github.run_number }} -PversionName="$VERSION" 2>&1 | tee build.log
+
+      - name: Show build errors
+        if: failure()
+        working-directory: android
+        run: |
+          grep -E "error:|FAILURE|What went wrong|e: |Could not" -A3 build.log | head -60 | while IFS= read -r l; do echo "::error::$l"; done
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk SculpFun-Studio.apk
+          cp android/app/src/main/assets/app.html app.html
+          NATIVE=$(cat android/NATIVE_VERSION)
+          BASE="https://github.com/${{ github.repository }}/releases/download/v$VERSION"
+          cat > update.json <<JSON
+          { "version": "$VERSION", "web": ${{ github.run_number }}, "native": $NATIVE,
+            "html": "$BASE/app.html", "apk": "$BASE/SculpFun-Studio.apk" }
+          JSON
+          gh release create "v$VERSION" SculpFun-Studio.apk app.html update.json \
+            --title "SculpFun Studio $VERSION" --latest \
+            --notes "Install **SculpFun-Studio.apk** on your Android phone or tablet. Installed apps update themselves."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SculpFun-Studio-${{ env.VERSION }}
+          path: SculpFun-Studio.apk

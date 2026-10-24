@@ -1,6 +1,6 @@
 import { Editor } from './editor.js';
 import { Machine } from './machine.js';
-import { SerialTransport, BleTransport, DemoTransport } from './transport.js';
+import { SerialTransport, BleTransport, DemoTransport, AndroidTransport, onBtEvent } from './transport.js';
 import { newObject, invalidate, objWorldBBox, DEFAULT_OPS, cutAroundLocal, cutAroundWorld, localCommands, uid } from './scene.js';
 import { SHAPES, CUT_AROUND } from './shapes.js';
 import { FONTS, getFont, loadUserFonts, addUserFont } from './text.js';
@@ -447,7 +447,15 @@ let consoleEl = null;
 function machineTab() {
   const m = app.machine;
   const out = [];
-  if (!m.connected) {
+  if (!m.connected && AndroidTransport.supported()) {
+    out.push(section('Connect',
+      h('div', { class: 'btns' },
+        btn('🔵 Connect to engraver', androidPicker, 'primary'),
+        btn('Demo (no laser)', () => connect('demo')),
+      ),
+      h('div', { class: 'hint' }, 'Turn the engraver on. Close the original SculpFun app so it doesn\'t hold the Bluetooth connection.'),
+    ));
+  } else if (!m.connected) {
     const serialOk = SerialTransport.supported(), bleOk = BleTransport.supported();
     out.push(section('Connect',
       h('div', { class: 'btns' },
@@ -514,10 +522,47 @@ function addLog(l) {
   if (consoleEl && consoleEl.isConnected) { consoleEl.append(logLine(l)); if (consoleEl.childNodes.length > 300) consoleEl.firstChild.remove(); consoleEl.scrollTop = consoleEl.scrollHeight; }
 }
 
-async function connect(kind) {
+function androidPicker() {
+  const BT = window.AndroidBT;
+  const st = BT.state();
+  if (st === 'unsupported') return toast('This device has no Bluetooth', true);
+  if (st === 'noperm' || st === 'off') {
+    openSheet('Bluetooth needed',
+      h('p', { class: 'hint' }, st === 'off' ? 'Bluetooth is turned off.' : 'Allow SculpFun Studio to use Bluetooth ("Nearby devices").'),
+      h('div', { class: 'btns' }, btn('Cancel', closeSheet), btn(st === 'off' ? 'Turn on Bluetooth' : 'Allow', () => { BT.requestSetup(); closeSheet(); }, 'primary')));
+    return;
+  }
+  let devs = [];
+  try { devs = JSON.parse(BT.devices()); } catch (e) { }
+  devs.sort((a, b) => (/sculpfun/i.test(b.name) ? 1 : 0) - (/sculpfun/i.test(a.name) ? 1 : 0));
+  const item = (d) => h('li', { onclick: () => { BT.stopScan(); closeSheet(); connect('android', d); } },
+    h('span', {}, /sculpfun/i.test(d.name) ? '🔥' : '🔵'), h('span', { class: 'nm' }, d.name || d.address),
+    h('span', { class: 'tag' }, d.paired ? 'paired' : 'new'));
+  const list = h('ul', { class: 'layers' }, ...devs.map(item));
+  const found = h('ul', { class: 'layers' });
+  const status = h('div', { class: 'hint' });
+  const seen = new Set(devs.map(d => d.address));
+  let off = null;
+  const scanBtn = btn('🔍 Search for nearby devices', () => {
+    status.textContent = 'Searching… (about 12 seconds)';
+    off && off();
+    off = onBtEvent((ev) => {
+      if (ev.type === 'found' && !seen.has(ev.address)) { seen.add(ev.address); found.append(item({ name: ev.name || ev.address, address: ev.address, paired: false })); }
+      if (ev.type === 'scanDone') { status.textContent = found.childNodes.length ? 'Search finished. Tap your engraver (its name starts with "SculpFun").' : 'Nothing new found. Is the engraver on?'; off && off(); }
+    });
+    BT.startScan();
+  });
+  openSheet('Choose your engraver',
+    devs.length ? h('div', {}, h('div', { class: 'hint' }, 'Paired devices'), list) : h('p', { class: 'hint' }, 'No paired devices yet. Tap Search.'),
+    h('div', { class: 'btns', style: { margin: '8px 0' } }, scanBtn), status, found,
+    h('div', { class: 'btns', style: { marginTop: '10px' } }, btn('Close', () => { BT.stopScan(); off && off(); closeSheet(); })));
+}
+
+async function connect(kind, dev) {
   const m = app.machine;
   let t;
-  if (kind === 'serial') t = new SerialTransport();
+  if (kind === 'android') { t = new AndroidTransport(dev.address, dev.name); toast('Connecting to ' + (dev.name || dev.address) + '…'); }
+  else if (kind === 'serial') t = new SerialTransport();
   else if (kind === 'ble') t = new BleTransport(app.cfg.bleChunk);
   else t = new DemoTransport();
   try {
@@ -661,6 +706,12 @@ async function stopJob() {
 }
 
 function download(name, data, type) {
+  if (window.AndroidApp) {
+    const u8 = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    let bin = ''; for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    window.AndroidApp.saveFile(name, type, btoa(bin));
+    return;
+  }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([data], { type }));
   a.download = name; document.body.append(a); a.click(); a.remove();
@@ -733,7 +784,7 @@ function menu() {
     h('button', { onclick: () => { closeSheet(); presetsSheet(); } }, '★ My material presets'),
     h('button', { onclick: () => { closeSheet(); checkUpdate(true); } }, '⟳ Check for updates'),
     h('button', { onclick: () => { closeSheet(); help(); } }, '❓ Help'),
-  ), h('p', { class: 'hint' }, 'Version ' + VERSION));
+  ), h('p', { class: 'hint' }, 'Version ' + VERSION + (window.AndroidApp ? ' · app ' + (JSON.parse(window.AndroidApp.info() || '{}').version || '') : '')));
 }
 function saveCfg() { lsSet('cfg', app.cfg); app.machine.autoUnlock = app.cfg.autoUnlock; }
 function settings() {
@@ -905,6 +956,7 @@ async function setupSW() {
   } catch (e) { console.warn('SW', e); }
 }
 async function checkUpdate(manual) {
+  if (window.AndroidApp) { if (manual) { toast('Checking for updates…'); window.AndroidApp.checkUpdate(); } return; }
   if (window.__BUNDLED) { if (manual) toast('This is the single-file version ' + VERSION + '. The installed web app updates itself.'); return; }
   try {
     const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
@@ -913,6 +965,27 @@ async function checkUpdate(manual) {
     else if (manual) toast('You have the latest version (' + VERSION + ')');
   } catch (e) { if (manual) toast('Could not check for updates (offline?)', true); }
 }
+
+// ---------------- Android app events ----------------
+window.__appEvent = (ev) => {
+  const bar = $('#updateBar');
+  if (ev.type === 'updateReady') {
+    if (!app.machine.connected && !app.run.active) { window.AndroidApp.reload(); return; }
+    bar.firstChild.textContent = 'Update ' + ev.version + ' downloaded. ';
+    $('#updateNow').textContent = 'Restart now'; $('#updateNow').onclick = () => window.AndroidApp.reload(); bar.hidden = false;
+  } else if (ev.type === 'apkUpdate') {
+    bar.firstChild.textContent = 'New app version ' + ev.version + '. ';
+    $('#updateNow').textContent = 'Download'; $('#updateNow').onclick = () => { window.AndroidApp.installUpdate(); bar.hidden = true; }; bar.hidden = false;
+  } else if (ev.type === 'upToDate') toast('You have the latest version');
+  else if (ev.type === 'updateError') toast('Could not check for updates: ' + ev.message, true);
+};
+window.__back = () => {
+  if (!$('#sheet').hidden) { closeSheet(); return true; }
+  if (app.previewOn) { togglePreview(); return true; }
+  if (app.tool !== 'select') { setTool('select'); return true; }
+  if (app.selectedId) { app.select(null); return true; }
+  return false;
+};
 
 // ---------------- boot ----------------
 (async function boot() {

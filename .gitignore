@@ -1,0 +1,7 @@
+android/.gradle/
+android/build/
+android/app/build/
+android/build.log
+android/app/src/main/assets/app.html
+android/app/src/main/assets/web-version.txt
+android/local.properties
