@@ -1,0 +1,40 @@
+name: Deploy app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp version
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          echo "Version $VERSION"
+          mkdir -p _site
+          rsync -a --exclude '.git' --exclude '.github' --exclude '_site' --exclude 'tools' ./ _site/
+          sed -i "s/^const VERSION = 'dev';/const VERSION = '$VERSION';/" _site/sw.js
+          sed -i "s/export const VERSION = 'dev';/export const VERSION = '$VERSION';/" _site/js/version.js
+          echo "{ \"version\": \"$VERSION\", \"commit\": \"${GITHUB_SHA::7}\", \"date\": \"$(date -u +%FT%TZ)\" }" > _site/version.json
+          grep -q "$VERSION" _site/sw.js && grep -q "$VERSION" _site/js/version.js
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

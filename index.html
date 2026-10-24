@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>SculpFun Studio</title>
+  <meta name="description" content="Engrave and cut with your SculpFun laser over Bluetooth">
+  <meta name="theme-color" content="#14161a">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><img src="icons/icon-192.png" alt=""><span>SculpFun Studio</span></div>
+    <button id="statusPill" class="pill off" title="Machine">● Not connected</button>
+    <button id="menuBtn" class="iconbtn" aria-label="Menu">☰</button>
+  </header>
+
+  <div id="updateBar" class="updatebar" hidden>New version ready. <button id="updateNow">Update now</button></div>
+
+  <main class="layout">
+    <section class="stage">
+      <canvas id="cv"></canvas>
+      <div class="zoomctl">
+        <button data-zoom="in" aria-label="Zoom in">+</button>
+        <button data-zoom="out" aria-label="Zoom out">−</button>
+        <button data-zoom="fit" aria-label="Fit">⤢</button>
+      </div>
+      <div id="drawBar" class="drawbar" hidden>
+        <span id="drawHint">Tap to add points</span>
+        <button id="lineUndo">Undo point</button>
+        <button id="lineClose">Close shape</button>
+        <button id="lineFinish" class="primary">Done</button>
+      </div>
+      <div id="previewBar" class="drawbar" hidden>
+        <span id="previewInfo"></span>
+        <button id="previewClose" class="primary">Close preview</button>
+      </div>
+    </section>
+
+    <nav class="tools" id="tools">
+      <button data-tool="select" class="on"><i>👆</i><span>Select</span></button>
+      <button data-add="text"><i>T</i><span>Text</span></button>
+      <button data-add="image"><i>🖼</i><span>Image</span></button>
+      <button data-add="shape"><i>⬟</i><span>Shape</span></button>
+      <button data-tool="line"><i>📐</i><span>Lines</span></button>
+      <button data-tool="draw"><i>✏️</i><span>Draw</span></button>
+      <button data-act="undo"><i>↶</i><span>Undo</span></button>
+      <button data-act="redo"><i>↷</i><span>Redo</span></button>
+    </nav>
+
+    <section class="panel">
+      <div class="tabs" role="tablist">
+        <button data-tab="object" class="on">Object</button>
+        <button data-tab="layers">Layers</button>
+        <button data-tab="machine">Machine</button>
+        <button data-tab="run">Run</button>
+      </div>
+      <div class="tabbody" id="tabbody"></div>
+    </section>
+  </main>
+
+  <input type="file" id="fileImage" accept="image/*,.svg" hidden>
+  <input type="file" id="fileProject" accept=".json,.sfs" hidden>
+  <input type="file" id="fileFont" accept=".ttf,.otf,.woff" hidden>
+  <div id="sheet" class="sheet" hidden><div class="sheet-card" id="sheetCard"></div></div>
+  <div id="toast" class="toast"></div>
+
+  <script src="vendor/opentype.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
