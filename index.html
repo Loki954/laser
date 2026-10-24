@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <title>SculpFun Studio</title>
+  <title>Loki Laser</title>
   <meta name="description" content="Engrave and cut with your SculpFun laser over Bluetooth">
   <meta name="theme-color" content="#14161a">
   <link rel="manifest" href="manifest.webmanifest">
@@ -13,7 +13,7 @@
 </head>
 <body>
   <header class="top">
-    <div class="brand"><img src="icons/icon-192.png" alt=""><span>SculpFun Studio</span></div>
+    <div class="brand"><img src="icons/icon-192.png" alt=""><span>Loki Laser</span></div>
     <button id="statusPill" class="pill off" title="Machine">● Not connected</button>
     <button id="menuBtn" class="iconbtn" aria-label="Menu">☰</button>
   </header>
@@ -27,6 +27,10 @@
         <button data-zoom="in" aria-label="Zoom in">+</button>
         <button data-zoom="out" aria-label="Zoom out">−</button>
         <button data-zoom="fit" aria-label="Fit">⤢</button>
+      </div>
+      <div class="stagebtns" id="stageBtns">
+        <button id="btnShowWhere"><i>🎯</i>Show where</button>
+        <button id="btnMove"><i>✥</i>Move</button>
       </div>
       <div id="drawBar" class="drawbar" hidden>
         <span id="drawHint">Tap to add points</span>

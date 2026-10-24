@@ -3,6 +3,14 @@ package com.loki954.sculpfun;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.DownloadManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.IntentFilter;
+import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.provider.Settings;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -49,6 +57,12 @@ public class MainActivity extends Activity {
     private byte[] pendingSave;
     private SharedPreferences prefs;
     private String pendingApkUrl;
+    private long lastCheck = 0;
+    private long apkDownloadId = -1;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable periodicCheck = new Runnable() {
+        @Override public void run() { checkForUpdates(false); handler.postDelayed(this, 30 * 60 * 1000L); }
+    };
 
     @SuppressLint({"SetJavaScriptEnabled", "JavascriptInterface"})
     @Override
@@ -131,7 +145,7 @@ public class MainActivity extends Activity {
 
         web.loadUrl(START);
         requestBtPermissions();
-        checkForUpdates(false);
+        handler.postDelayed(periodicCheck, 3000);
     }
 
     // ---------- web app content (bundled, or a newer downloaded version) ----------
@@ -164,6 +178,7 @@ public class MainActivity extends Activity {
 
     // ---------- updates from GitHub releases ----------
     private void checkForUpdates(final boolean manual) {
+        lastCheck = System.currentTimeMillis();
         new Thread(() -> {
             try {
                 String json = new String(httpGet(BuildConfig.UPDATE_URL), StandardCharsets.UTF_8);
@@ -278,14 +293,59 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (lastCheck > 0 && System.currentTimeMillis() - lastCheck > 10 * 60 * 1000L) checkForUpdates(false);
         sendToJs("window.__appEvent && window.__appEvent({type:'resume'})");
     }
 
     @Override
     protected void onDestroy() {
+        handler.removeCallbacks(periodicCheck);
+        if (apkReceiver != null) { try { unregisterReceiver(apkReceiver); } catch (Exception ignored) { } }
         if (bt != null) bt.shutdown();
         if (web != null) web.destroy();
         super.onDestroy();
+    }
+
+    // ---------- download the new APK and open the Android installer ----------
+    private BroadcastReceiver apkReceiver;
+
+    private void downloadAndInstall(String url) {
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            Toast.makeText(this, "Allow Loki Laser to install updates, then tap Download again", Toast.LENGTH_LONG).show();
+            try { startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))); } catch (Exception ignored) { }
+            return;
+        }
+        try {
+            DownloadManager dm = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+            File old = new File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "Loki-Laser-update.apk");
+            if (old.exists()) old.delete();
+            DownloadManager.Request r = new DownloadManager.Request(Uri.parse(url));
+            r.setTitle("Loki Laser update");
+            r.setMimeType("application/vnd.android.package-archive");
+            r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            r.setDestinationInExternalFilesDir(this, Environment.DIRECTORY_DOWNLOADS, "Loki-Laser-update.apk");
+            if (apkReceiver == null) {
+                apkReceiver = new BroadcastReceiver() {
+                    @Override public void onReceive(Context c, Intent i) {
+                        long id = i.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+                        if (id != apkDownloadId) return;
+                        Uri apk = dm.getUriForDownloadedFile(id);
+                        if (apk == null) { Toast.makeText(MainActivity.this, "Update download failed", Toast.LENGTH_LONG).show(); return; }
+                        Intent inst = new Intent(Intent.ACTION_VIEW);
+                        inst.setDataAndType(apk, "application/vnd.android.package-archive");
+                        inst.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                        try { startActivity(inst); } catch (Exception e) { Toast.makeText(MainActivity.this, "Open the downloaded update from notifications", Toast.LENGTH_LONG).show(); }
+                    }
+                };
+                IntentFilter f = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+                if (Build.VERSION.SDK_INT >= 33) registerReceiver(apkReceiver, f, Context.RECEIVER_EXPORTED);
+                else registerReceiver(apkReceiver, f);
+            }
+            apkDownloadId = dm.enqueue(r);
+            Toast.makeText(this, "Downloading update…", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception ignored) { }
+        }
     }
 
     /** General app functions exposed as window.AndroidApp */
@@ -324,7 +384,7 @@ public class MainActivity extends Activity {
         public void installUpdate() {
             final String u = pendingApkUrl;
             if (u == null) return;
-            runOnUiThread(() -> { try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))); } catch (Exception ignored) { } });
+            runOnUiThread(() -> downloadAndInstall(u));
         }
 
         @JavascriptInterface

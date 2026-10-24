@@ -132,3 +132,8 @@ input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(40px); background: #222; color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; opacity: 0; transition: .25s; pointer-events: none; z-index: 60; max-width: 90vw; text-align: center; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.err { background: #8a1c20; }
+
+.stagebtns { position: absolute; left: 8px; top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.stagebtns button { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line-c); background: color-mix(in srgb, var(--panel) 92%, transparent); border-radius: 10px; padding: 7px 11px; font-weight: 700; font-size: 13px; color: var(--text); }
+.stagebtns button i { font-style: normal; font-size: 16px; }
+.stagebtns button:first-child { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }

@@ -148,7 +148,7 @@ export class Machine {
   }
 
   // ---------- jobs ----------
-  async uploadAndRun(name, gcode, { setOrigin = true, absolute = false } = {}) {
+  async uploadAndRun(name, gcode, { setOrigin = true, absolute = false, offset = [0, 0] } = {}) {
     const data = enc.encode(gcode);
     this.uploading = true;
     this.cancelUpload = false;
@@ -185,16 +185,15 @@ export class Machine {
     }
     this.emit('line', { dir: 'in', text: `Uploaded ${data.length} bytes` });
     await sleep(300);
-    if (absolute) await this.send('G92.1');
-    else if (setOrigin) await this.send('G92 X0 Y0');
+    if (absolute || setOrigin) await this.send(this.originCmd({ absolute, offset }));
     this.jobActive = true; this._sawRun = false;
     await this.send(`[ESP220]/${name}`);
     this.emit('progress', { phase: 'run', pct: 0 });
   }
 
   // Character-counting streaming (fallback when SD upload is not available)
-  async stream(gcode, { setOrigin = true, absolute = false, rxBuffer = 120 } = {}) {
-    if (absolute) await this.send('G92.1'); else if (setOrigin) await this.send('G92 X0 Y0');
+  async stream(gcode, { setOrigin = true, absolute = false, offset = [0, 0], rxBuffer = 120 } = {}) {
+    if (absolute || setOrigin) await this.send(this.originCmd({ absolute, offset }));
     await this.cmdChain;
     const lines = gcode.split('\n').map(l => l.replace(/;.*$/, '').trim()).filter(Boolean);
     const inflight = [];
@@ -225,6 +224,13 @@ export class Machine {
     this.emit('progress', { phase: 'run', pct: 100 });
   }
 
+  // Set the job origin: the laser beam, or a red pointer that sits offset from the beam by [dx, dy] mm
+  originCmd({ absolute = false, offset = [0, 0] } = {}) {
+    if (absolute) return 'G92.1';
+    const [dx, dy] = offset || [0, 0];
+    return `G92 X${(-dx || 0).toFixed(2)} Y${(-dy || 0).toFixed(2)}`;
+  }
+
   pause() { return this.realtime('!'); }
   resume() { return this.realtime('~'); }
   async stop() {
@@ -248,30 +254,30 @@ export class Machine {
     return this.send(`$J=G91 G21 ${p.join(' ')} F${feed}`);
   }
 
-  // Frame the job's bounding box with a weak visible laser (same method as the original app)
-  async frame(b, { power = 3, feed = 3000, setOrigin = true, absolute = false } = {}) {
-    if (absolute) await this.send('G92.1'); else if (setOrigin) await this.send('G92 X0 Y0');
-    const f = (v) => v.toFixed(2);
-    await this.send(`M3 S${power}`);
-    await this.send(`$J=G90 X${f(b.x0)} Y${f(b.y0)} F${feed}`);
-    await this.send(`$J=G90 X${f(b.x1)} Y${f(b.y0)} F${feed}`);
-    await this.send(`$J=G90 X${f(b.x1)} Y${f(b.y1)} F${feed}`);
-    await this.send(`$J=G90 X${f(b.x0)} Y${f(b.y1)} F${feed}`);
-    await this.send(`$J=G90 X${f(b.x0)} Y${f(b.y0)} F${feed}`);
-    await this.send(`$J=G90 X0 Y0 F${feed}`);
-    await this.waitIdle();
-    await this.send('M5');
+  // Show where the job goes. With the laser: a weak visible beam (like the original app).
+  // With a red pointer: laser stays off and the head is shifted so the pointer draws the outline.
+  async frame(b, { power = 3, feed = 3000, absolute = false, offset = [0, 0], pointer = false } = {}) {
+    const pts = [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1], [b.x0, b.y0]];
+    return this.trace(pts, { power, feed, absolute, offset, pointer, closed: false });
   }
-  // Trace an outline (G-code coordinates) with a weak beam
-  async trace(pts, { power = 3, feed = 3000, setOrigin = true, absolute = false } = {}) {
+  async trace(pts, { power = 3, feed = 3000, absolute = false, offset = [0, 0], pointer = false, closed = true } = {}) {
     if (!pts.length) return;
-    if (absolute) await this.send('G92.1'); else if (setOrigin) await this.send('G92 X0 Y0');
+    const [dx, dy] = pointer ? (offset || [0, 0]) : [0, 0];
     const f = (v) => v.toFixed(2);
-    await this.send(`G90\nG0 X${f(pts[0][0])} Y${f(pts[0][1])}`);
-    await this.send(`M3 S${power}\nG1 F${feed}`);
-    for (const p of pts.slice(1).concat([pts[0]])) await this.send(`G1 X${f(p[0])} Y${f(p[1])} S${power}`);
-    await this.send('G0 X0 Y0');
-    await this.waitIdle();
-    await this.send('M5');
+    this.cancelFrame = false;
+    await this.send(this.originCmd({ absolute, offset: pointer ? [dx, dy] : [0, 0] }));
+    const path = closed ? pts.concat([pts[0]]) : pts;
+    // move to the first corner with the beam off
+    await this.send(`$J=G90 X${f(path[0][0] - dx)} Y${f(path[0][1] - dy)} F${feed}`);
+    await this.waitIdle(60000);
+    if (!pointer) await this.send(`M3 S${power}`);
+    for (const p of path.slice(1)) {
+      if (this.cancelFrame) break;
+      await this.send(`$J=G90 X${f(p[0] - dx)} Y${f(p[1] - dy)} F${feed}`);
+    }
+    await this.waitIdle(120000);
+    if (!pointer) await this.send('M5');
+    await this.send(`$J=G90 X${f(-dx)} Y${f(-dy)} F${feed}`);
+    await this.waitIdle(60000);
   }
 }

@@ -94,7 +94,7 @@ export function buildJob(objects, bitmaps, cfg) {
   const [ox, oy] = jobOrigin(wb, cfg);
   const T = (x, y) => [x - ox, oy - y];
 
-  out.push('; SculpFun Studio job');
+  out.push('; Loki Laser job');
   const gb0 = T(wb.x0, wb.y1), gb1 = T(wb.x1, wb.y0);
   out.push(`; MKS Bounds: X${f(gb0[0])} Y${f(gb0[1])} to X${f(gb1[0])} Y${f(gb1[1])}`);
   out.push('G90', 'G21', 'G0 X0 Y0 S0', 'M4 S0');

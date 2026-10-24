@@ -86,7 +86,7 @@ export function toast(msg, err) {
 export function openSheet(title, ...content) {
   const s = document.getElementById('sheet'), c = document.getElementById('sheetCard');
   c.innerHTML = '';
-  c.append(h('h2', {}, title), ...content.flat());
+  c.append(h('h2', {}, title), ...content.flat(Infinity).filter(x => x != null && x !== false));
   s.hidden = false;
   s.onclick = (e) => { if (e.target === s) closeSheet(); };
 }

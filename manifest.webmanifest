@@ -1,6 +1,6 @@
 {
-  "name": "SculpFun Studio",
-  "short_name": "SculpFun",
+  "name": "Loki Laser",
+  "short_name": "Loki Laser",
   "description": "Engrave and cut with your SculpFun laser over Bluetooth",
   "start_url": "./",
   "scope": "./",

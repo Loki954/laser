@@ -20,7 +20,7 @@ safe = lambda s: s.replace('</script', '<\\/script')
 html = R('index.html')
 body = html[html.index('<body>') + 6: html.index('<script src="vendor/opentype.min.js">')]
 body = body.replace('icons/icon-192.png', icon)
-head = ('<title>SculpFun Studio</title>\n<meta name="theme-color" content="#14161a">\n'
+head = ('<title>Loki Laser</title>\n<meta name="theme-color" content="#14161a">\n'
         f'<link rel="icon" href="{icon}">\n<style>\n{R("css/app.css")}\n</style>\n')
 scripts = (f'<script>{safe(R("vendor/opentype.min.js"))}</script>\n'
            f'<script>window.__BUNDLED=true;window.__FONTDATA={json.dumps(fonts)};</script>\n'

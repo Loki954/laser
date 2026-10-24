@@ -27,6 +27,7 @@ const DEFAULT_CFG = {
   model: 's9', bedW: 410, bedH: 400, sMax: 1000, framePower: 3, frameFeed: 3000, pointerPower: 10,
   anchor: 'bl', absolute: false, air: false, overscan: 1, bidir: true, autoUnlock: true,
   transfer: 'upload', fileName: 'studio.nc', bleChunk: 20, rxBuffer: 120, jogStep: 10, jogFeed: 3000,
+  pointer: false, pointerDX: 0, pointerDY: 0, hasHoming: false, burnPower: 200, frameRepeat: false,
 };
 
 const app = window.app = {
@@ -478,25 +479,7 @@ function machineTab() {
       h('div', { class: 'stat' }, h('span', {}, 'Position'), h('b', { id: 'mPos' }, `X ${s.wpos[0].toFixed(1)}  Y ${s.wpos[1].toFixed(1)}`)),
       h('div', { class: 'btns', style: { marginTop: '6px' } }, btn('Disconnect', () => m.detach(), 'danger')),
     ));
-    const c = app.cfg;
-    const J = (dx, dy) => () => m.jog(dx * c.jogStep, dy * c.jogStep, c.jogFeed).catch(e => toast(e.message, true));
-    out.push(section('Move the laser',
-      row('Step', seg([['0.1', '0.1'], ['1', '1'], ['10', '10'], ['50', '50 mm']], c.jogStep, (v) => { c.jogStep = +v; saveCfg(); })),
-      row('Speed', num(c.jogFeed, { min: 100, max: 10000, step: 100, onChange: (v) => { c.jogFeed = v; saveCfg(); } }), h('span', { class: 'hint' }, 'mm/min')),
-      h('div', { class: 'jog' },
-        btn('↖', J(-1, 1)), btn('↑', J(0, 1)), btn('↗', J(1, 1)),
-        btn('←', J(-1, 0)), h('button', { class: 'c', onclick: () => m.send('$J=G90 X0 Y0 F' + c.jogFeed).catch(e => toast(e.message, true)) }, 'Go to start'), btn('→', J(1, 0)),
-        btn('↙', J(-1, -1)), btn('↓', J(0, -1)), btn('↘', J(1, -1)),
-      ),
-      h('div', { class: 'btns', style: { marginTop: '8px' } },
-        btn('📍 Set start here', () => m.send('G92 X0 Y0').then(() => toast('Start point set to current position'))),
-        btn(laserDot ? '🔴 Dot off' : '🔴 Laser dot', toggleDot),
-        btn(c.air ? '💨 Air off' : '💨 Air on', () => { c.air = !c.air; saveCfg(); m.send(c.air ? 'M8' : 'M9').catch(() => { }); renderPanel(); }),
-        btn('🔓 Unlock', () => m.send('$X')),
-        btn('🏠 Home', async () => { if (await ask('Run homing ($H)? Only for machines with limit switches.', 'Home')) m.send('$H', 60000).catch(e => toast(e.message, true)); }),
-      ),
-      h('div', { class: 'hint' }, 'Move the laser over the spot where the design should start, then tap "Set start here" — or just start; the current position is used as the start point.'),
-    ));
+    out.push(section('Move the laser', ...movePanel()));
   }
   consoleEl = h('div', { class: 'console' });
   app.log.slice(-200).forEach(l => consoleEl.append(logLine(l)));
@@ -507,6 +490,140 @@ function machineTab() {
   setTimeout(() => { consoleEl.scrollTop = consoleEl.scrollHeight; }, 0);
   return out;
 }
+// ---------------- moving the head ----------------
+function originOpts() {
+  const c = app.cfg;
+  return { absolute: c.absolute, offset: c.pointer ? [+c.pointerDX || 0, +c.pointerDY || 0] : [0, 0] };
+}
+function movePanel() {
+  const m = app.machine, c = app.cfg;
+  const go = (p) => p.catch(e => toast(e.message, true));
+  const J = (dx, dy) => () => { if (!m.connected) return toast('Connect to the engraver first', true); go(m.jog(dx * c.jogStep, dy * c.jogStep, c.jogFeed)); };
+  const home = async () => {
+    if (!m.connected) return toast('Connect to the engraver first', true);
+    if (c.hasHoming) { toast('Homing…'); go(m.send('$H', 90000)); }
+    else go(m.send('$J=G90 X0 Y0 F' + c.jogFeed));
+  };
+  return [
+    row('Step', seg([['0.1', '0.1'], ['1', '1'], ['10', '10'], ['50', '50 mm']], c.jogStep, (v) => { c.jogStep = +v; saveCfg(); })),
+    row('Speed', num(c.jogFeed, { min: 100, max: 10000, step: 100, onChange: (v) => { c.jogFeed = v; saveCfg(); } }), h('span', { class: 'hint' }, 'mm/min')),
+    h('div', { class: 'jog' },
+      btn('↖', J(-1, 1)), btn('↑', J(0, 1)), btn('↗', J(1, 1)),
+      btn('←', J(-1, 0)), h('button', { class: 'c', onclick: home }, c.hasHoming ? '🏠 Home' : '🏠 Start'), btn('→', J(1, 0)),
+      btn('↙', J(-1, -1)), btn('↓', J(0, -1)), btn('↘', J(1, -1)),
+    ),
+    h('div', { class: 'btns', style: { marginTop: '8px' } },
+      btn('⏹ Stop moving', () => m.connected && m.realtime(String.fromCharCode(0x85))),
+      btn(laserDot ? '🔴 Laser dot off' : '🔴 Laser dot', toggleDot),
+      btn(c.air ? '💨 Air off' : '💨 Air on', () => { c.air = !c.air; saveCfg(); if (m.connected) m.send(c.air ? 'M8' : 'M9').catch(() => { }); renderPanel(); moveSheetRefresh(); }),
+      btn('🔓 Unlock', () => go(m.send('$X'))),
+      c.hasHoming ? btn('Go to start', () => go(m.send('$J=G90 X0 Y0 F' + c.jogFeed))) : null,
+    ),
+    h('div', { class: 'hint' }, c.hasHoming ? '🏠 Home drives to the limit switches. "Go to start" returns to where the last job started.'
+      : '🏠 Start returns the head to where the last job or frame started. Machine has limit switches? Turn on "Homing" in Settings.'),
+    h('div', { class: 'hint' }, 'The job always starts where the ' + (c.pointer ? 'red pointer' : 'laser') + ' is when you press Start or Show where.'),
+  ];
+}
+let moveSheetOpen = false;
+function moveSheet() {
+  moveSheetOpen = true;
+  const m = app.machine;
+  openSheet('Move the laser', !m.connected ? h('div', { class: 'btns', style: { marginBottom: '8px' } }, btn('Connect first', () => { closeSheet(); setTab('machine'); }, 'primary')) : null,
+    ...movePanel(), h('div', { class: 'btns', style: { marginTop: '10px' } }, btn('Close', () => { moveSheetOpen = false; closeSheet(); })));
+}
+function moveSheetRefresh() { if (moveSheetOpen && !$('#sheet').hidden) moveSheet(); }
+
+let framing = false;
+function showWhereSheet() {
+  const m = app.machine, c = app.cfg;
+  const offTxt = `${(+c.pointerDX).toFixed(1)}, ${(+c.pointerDY).toFixed(1)} mm`;
+  openSheet('Show where it will engrave',
+    !m.connected ? h('div', { class: 'btns', style: { marginBottom: '8px' } }, btn('Connect first', () => { closeSheet(); setTab('machine'); }, 'primary')) : null,
+    row('Show with', seg([['laser', '🔴 Laser (weak beam)'], ['pointer', '➕ Red pointer']], c.pointer ? 'pointer' : 'laser', (v) => {
+      c.pointer = v === 'pointer'; saveCfg();
+      if (c.pointer && !c.pointerDX && !c.pointerDY) { closeSheet(); pointerCalibration(); return; }
+      editor.render(); showWhereSheet();
+    })),
+    c.pointer ? h('div', { class: 'hint' }, `Red pointer offset from the laser: ${offTxt}. `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); closeSheet(); pointerCalibration(); } }, 'Set it up')) : h('div', { class: 'hint' }, 'The laser runs at very low power (S' + c.framePower + '), so it shows a dot without burning.'),
+    h('div', { class: 'btns', style: { margin: '8px 0' } },
+      btn('⬚ Box around the design', () => runFrame(false), 'primary'),
+      btn('✎ Trace the outline', () => runFrame(true)),
+    ),
+    row('Keep repeating', toggle(c.frameRepeat, (v) => { c.frameRepeat = v; saveCfg(); }), h('span', { class: 'hint' }, 'until you tap Stop')),
+    h('div', { class: 'btns' }, btn('⏹ Stop', stopFrame, 'danger'), btn('Move the laser…', () => { closeSheet(); moveSheet(); }), btn('Close', closeSheet)),
+    h('div', { class: 'hint' }, 'Move the ' + (c.pointer ? 'red pointer' : 'laser') + ' to where the design should start (' + ({ bl: 'bottom-left corner', center: 'center', tl: 'top-left corner', tr: 'top-right corner', br: 'bottom-right corner' }[c.anchor] || 'bed position') + '), then tap a button above.'),
+  );
+}
+async function runFrame(trace) {
+  const m = app.machine;
+  if (!m.connected) { toast('Connect to the engraver first', true); return; }
+  if (framing) return;
+  let job; try { job = getJob(); } catch (e) { return toast(e.message, true); }
+  const c = app.cfg;
+  framing = true;
+  try {
+    do {
+      toast(trace ? 'Tracing the outline…' : 'Showing the box…');
+      const opts = { power: c.framePower, feed: c.frameFeed, absolute: c.absolute, offset: [+c.pointerDX || 0, +c.pointerDY || 0], pointer: c.pointer };
+      if (trace) await m.trace(job.hull, opts); else await m.frame(job.gbox, opts);
+    } while (framing && c.frameRepeat && m.connected && !m.cancelFrame);
+  } catch (e) { toast(e.message, true); try { await m.send('M5'); } catch (_) { } }
+  framing = false;
+}
+async function stopFrame() {
+  const m = app.machine;
+  framing = false;
+  if (!m.connected) return;
+  m.cancelFrame = true;
+  await m.realtime(String.fromCharCode(0x85)); // jog cancel
+  try { await m.send('M5'); } catch (e) { }
+  toast('Stopped');
+}
+function pointerCalibration() {
+  const m = app.machine, c = app.cfg;
+  let dot = null;
+  const step = h('div');
+  const render = () => {
+    step.innerHTML = '';
+    if (!m.connected) { step.append(h('p', { class: 'hint warn' }, 'Connect to the engraver first.'), btn('Connect', () => { closeSheet(); setTab('machine'); }, 'primary')); return; }
+    if (!dot) {
+      step.append(
+        h('p', {}, '1. Put a scrap of wood or cardboard under the laser.'),
+        h('p', {}, '2. Tap the button. The laser burns one small dot.'),
+        h('div', { class: 'btns' }, btn('🔥 Burn a dot', async () => {
+          try {
+            await m.send(`M3 S${c.burnPower}\nG4 P0.4\nM5`);
+            dot = [...m.status.wpos]; render();
+          } catch (e) { toast(e.message, true); }
+        }, 'primary')),
+      );
+    } else {
+      step.append(
+        h('p', {}, '3. Move the head until the red pointer sits exactly on the burnt dot. Use small steps (1 or 0.1 mm) at the end.'),
+        ...movePanel(),
+        h('div', { class: 'btns', style: { marginTop: '8px' } },
+          btn('Burn again', () => { dot = null; render(); }),
+          btn('✔ Pointer is on the dot', () => {
+            const p = m.status.wpos;
+            c.pointerDX = Math.round((dot[0] - p[0]) * 100) / 100; c.pointerDY = Math.round((dot[1] - p[1]) * 100) / 100;
+            c.pointer = true; saveCfg(); closeSheet();
+            toast(`Saved: pointer is ${c.pointerDX} mm X, ${c.pointerDY} mm Y from the laser`);
+          }, 'primary')),
+      );
+    }
+  };
+  render();
+  openSheet('Set up the red pointer',
+    h('p', { class: 'hint' }, 'The red pointer sits a little beside the laser beam. This measures how far, so the pointer can show exactly where the laser will engrave.'),
+    step,
+    h('div', { class: 'grid2', style: { marginTop: '10px' } },
+      field('Offset X mm', num(c.pointerDX, { step: 0.1, onChange: (v) => { c.pointerDX = v; saveCfg(); } })),
+      field('Offset Y mm', num(c.pointerDY, { step: 0.1, onChange: (v) => { c.pointerDY = v; saveCfg(); } })),
+    ),
+    h('div', { class: 'btns', style: { marginTop: '10px' } }, btn('Close', closeSheet)),
+  );
+}
+
 let laserDot = false;
 async function toggleDot() {
   const m = app.machine;
@@ -514,7 +631,7 @@ async function toggleDot() {
     if (!laserDot) { await m.send(`M3 S${app.cfg.pointerPower}\nG1 F1000`); laserDot = true; toast('Weak laser dot ON — don\'t look into it'); }
     else { await m.send('M5'); laserDot = false; }
   } catch (e) { toast(e.message, true); }
-  renderPanel();
+  renderPanel(); moveSheetRefresh();
 }
 function logLine(l) { return h('div', { class: l.dir === 'out' ? 'out' : l.dir === 'err' ? 'err' : '' }, (l.dir === 'out' ? '› ' : '') + l.text); }
 function addLog(l) {
@@ -528,7 +645,7 @@ function androidPicker() {
   if (st === 'unsupported') return toast('This device has no Bluetooth', true);
   if (st === 'noperm' || st === 'off') {
     openSheet('Bluetooth needed',
-      h('p', { class: 'hint' }, st === 'off' ? 'Bluetooth is turned off.' : 'Allow SculpFun Studio to use Bluetooth ("Nearby devices").'),
+      h('p', { class: 'hint' }, st === 'off' ? 'Bluetooth is turned off.' : 'Allow Loki Laser to use Bluetooth ("Nearby devices").'),
       h('div', { class: 'btns' }, btn('Cancel', closeSheet), btn(st === 'off' ? 'Turn on Bluetooth' : 'Allow', () => { BT.requestSetup(); closeSheet(); }, 'primary')));
     return;
   }
@@ -613,8 +730,7 @@ function runTab() {
   sum.push(row('Air assist', toggle(c.air, (v) => { c.air = v; saveCfg(); })));
   sum.push(h('div', { class: 'btns' },
     btn(app.previewOn ? 'Hide preview' : '👁 Preview path', togglePreview),
-    btn('⬚ Frame', () => doFrame(false), m.connected ? '' : ''),
-    btn('✎ Trace outline', () => doFrame(true)),
+    btn('🎯 Show where', showWhereSheet),
   ));
   out.push(section('Job', ...sum));
 
@@ -663,18 +779,6 @@ function togglePreview() {
   } catch (e) { toast(e.message, true); }
 }
 
-async function doFrame(trace) {
-  const m = app.machine;
-  if (!m.connected) return toast('Connect to the engraver first', true);
-  let job; try { job = getJob(); } catch (e) { return toast(e.message, true); }
-  const c = app.cfg;
-  try {
-    toast(trace ? 'Tracing outline with a weak beam…' : 'Framing with a weak beam…');
-    if (trace) await m.trace(job.hull, { power: c.framePower, feed: c.frameFeed, absolute: c.absolute });
-    else await m.frame(job.gbox, { power: c.framePower, feed: c.frameFeed, absolute: c.absolute });
-  } catch (e) { toast(e.message, true); try { await m.send('M5'); } catch (_) { } }
-}
-
 async function startJob() {
   const m = app.machine;
   if (!m.connected) { setTab('machine'); return toast('Connect to the engraver first', true); }
@@ -682,7 +786,7 @@ async function startJob() {
   const c = app.cfg;
   openSheet('Start the job?',
     h('div', { class: 'stat' }, h('span', {}, 'Estimated time'), h('b', {}, '≈ ' + fmtTime(job.time))),
-    h('div', { class: 'stat' }, h('span', {}, 'Start point'), h('b', {}, c.absolute ? 'bed position' : { bl: 'bottom-left', center: 'center', tl: 'top-left', tr: 'top-right', br: 'bottom-right' }[c.anchor] + ' = laser head now')),
+    h('div', { class: 'stat' }, h('span', {}, 'Start point'), h('b', {}, c.absolute ? 'bed position' : { bl: 'bottom-left', center: 'center', tl: 'top-left', tr: 'top-right', br: 'bottom-right' }[c.anchor] + ' = ' + (c.pointer ? 'red pointer' : 'laser') + ' now')),
     h('p', { class: 'hint warn' }, '⚠ Put on laser safety glasses. Check focus and that the material is flat. Stay with the machine.'),
     h('div', { class: 'btns' }, btn('Cancel', closeSheet), btn('▶ Start now', async () => {
       closeSheet();
@@ -690,8 +794,8 @@ async function startJob() {
       if (app.previewOn) togglePreview();
       setTab('run');
       try {
-        if (c.transfer === 'upload') await m.uploadAndRun(c.fileName, job.gcode, { absolute: c.absolute });
-        else { await m.stream(job.gcode, { absolute: c.absolute, rxBuffer: c.rxBuffer }); }
+        if (c.transfer === 'upload') await m.uploadAndRun(c.fileName, job.gcode, originOpts());
+        else { await m.stream(job.gcode, { ...originOpts(), rxBuffer: c.rxBuffer }); }
       } catch (e) {
         app.run = { active: false, lastMsg: 'Failed: ' + e.message };
         toast(e.message, true); renderPanel();
@@ -798,6 +902,12 @@ function settings() {
       h('div', { class: 'grid2' }, field('Max S value ($30)', n('sMax', { min: 1, max: 10000 })), field('Overscan mm', n('overscan', { min: 0, max: 20, step: 0.5 }))),
       row('Engrave both ways', toggle(c.bidir, (v) => { c.bidir = v; saveCfg(); })),
       row('Auto-unlock alarm', toggle(c.autoUnlock, (v) => { c.autoUnlock = v; saveCfg(); })),
+      row('Homing', toggle(c.hasHoming, (v) => { c.hasHoming = v; saveCfg(); }), h('span', { class: 'hint' }, 'machine has limit switches ($H)')),
+    ),
+    section('Red pointer',
+      row('Show where with', seg([['laser', 'Laser'], ['pointer', 'Red pointer']], c.pointer ? 'pointer' : 'laser', (v) => { c.pointer = v === 'pointer'; saveCfg(); })),
+      h('div', { class: 'grid2' }, field('Pointer offset X mm', n('pointerDX', { step: 0.1 })), field('Pointer offset Y mm', n('pointerDY', { step: 0.1 }))),
+      h('div', { class: 'btns' }, btn('Measure it…', () => { closeSheet(); pointerCalibration(); })),
     ),
     section('Frame & laser dot',
       h('div', { class: 'grid3' }, field('Frame power (S)', n('framePower', { min: 0, max: 100 })), field('Frame speed', n('frameFeed', { min: 100, max: 10000, step: 100 })), field('Dot power (S)', n('pointerPower', { min: 0, max: 100 }))),
@@ -821,8 +931,9 @@ function help() {
     h('ol', { class: 'hint', style: { paddingLeft: '18px', fontSize: '14px' } },
       h('li', {}, 'Add text, an image or a shape. Or tap "Lines" / "Draw" to draw cut lines.'),
       h('li', {}, 'Select it and choose Engrave or Cut in the Object tab. Turn on "Cut around" to cut it out as a heart, circle…'),
-      h('li', {}, 'Machine tab → Bluetooth → pick your SculpFun. Move the laser to where the design should start.'),
-      h('li', {}, 'Run tab → Frame to check the position → Start.'),
+      h('li', {}, 'Machine tab → Connect → pick your SculpFun. Tap ✥ Move to put the laser (or red pointer) where the design should start.'),
+      h('li', {}, 'Tap 🎯 Show where to see the outline on the material.'),
+      h('li', {}, 'Run tab → Start.'),
     ),
     h('p', { class: 'hint' }, 'Tip: install this app from Chrome\'s menu → "Add to Home screen". It updates itself automatically.'),
     h('div', { class: 'btns' }, btn('Close', closeSheet, 'primary')),
@@ -831,7 +942,7 @@ function help() {
 async function saveProject() {
   const imgs = {};
   for (const o of app.objects) if (o.type === 'image' && app.blobs[o.id]) imgs[o.id] = await blobToDataURL(app.blobs[o.id]);
-  download('project.sfs.json', JSON.stringify({ app: 'sculpfun-studio', v: 1, objects: JSON.parse(serialize()), images: imgs }), 'application/json');
+  download('project.sfs.json', JSON.stringify({ app: 'loki-laser', v: 1, objects: JSON.parse(serialize()), images: imgs }), 'application/json');
 }
 const blobToDataURL = (b) => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(b); });
 async function openProject(file) {
@@ -920,6 +1031,8 @@ document.querySelectorAll('[data-zoom]').forEach(b => b.onclick = () => {
 $('#fileImage').onchange = (e) => { const f = e.target.files[0]; if (f) addImageFile(f); e.target.value = ''; };
 $('#fileProject').onchange = (e) => { const f = e.target.files[0]; if (f) openProject(f); e.target.value = ''; };
 $('#menuBtn').onclick = menu;
+$('#btnShowWhere').onclick = showWhereSheet;
+$('#btnMove').onclick = moveSheet;
 $('#lineFinish').onclick = () => { app.finishLine(false); setTool('select'); };
 $('#lineClose').onclick = () => { app.finishLine(true); setTool('select'); };
 $('#lineUndo').onclick = () => { if (editor.draft && editor.draft.length) { editor.draft.pop(); app.lineDraftChanged(); editor.render(); } };

@@ -89,19 +89,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk SculpFun-Studio.apk
+          cp android/app/build/outputs/apk/release/app-release.apk Loki-Laser.apk
           cp android/app/src/main/assets/app.html app.html
           NATIVE=$(cat android/NATIVE_VERSION)
           BASE="https://github.com/${{ github.repository }}/releases/download/v$VERSION"
           cat > update.json <<JSON
           { "version": "$VERSION", "web": ${{ github.run_number }}, "native": $NATIVE,
-            "html": "$BASE/app.html", "apk": "$BASE/SculpFun-Studio.apk" }
+            "html": "$BASE/app.html", "apk": "$BASE/Loki-Laser.apk" }
           JSON
-          gh release create "v$VERSION" SculpFun-Studio.apk app.html update.json \
-            --title "SculpFun Studio $VERSION" --latest \
-            --notes "Install **SculpFun-Studio.apk** on your Android phone or tablet. Installed apps update themselves."
+          gh release create "v$VERSION" Loki-Laser.apk app.html update.json \
+            --title "Loki Laser $VERSION" --latest \
+            --notes "Install **Loki-Laser.apk** on your Android phone or tablet. Installed apps update themselves."
 
       - uses: actions/upload-artifact@v4
         with:
-          name: SculpFun-Studio-${{ env.VERSION }}
-          path: SculpFun-Studio.apk
+          name: Loki-Laser-${{ env.VERSION }}
+          path: Loki-Laser.apk
