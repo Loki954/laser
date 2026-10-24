@@ -1144,7 +1144,16 @@ window.__back = () => {
   if (app.previewOn) { togglePreview(); return true; }
   if (app.tool !== 'select') { setTool('select'); return true; }
   if (app.selectedId || app.groupSel) { app.select(null); return true; }
-  return false;
+  if (app.tab !== 'object') { setTab('object'); return true; }
+  if (window.__exitNext) return false;
+  const busy = app.run.active ? ' The job keeps running on the engraver.' : app.machine.connected ? ' The engraver will be disconnected.' : '';
+  ask('Close Loki Laser?' + busy, 'Close app', true).then(async (yes) => {
+    if (!yes) return;
+    try { if (app.machine.connected && !app.run.active) await app.machine.detach(); } catch (e) { }
+    if (window.AndroidApp && window.AndroidApp.exit) window.AndroidApp.exit();
+    else { window.__exitNext = true; toast('Press back again to close'); setTimeout(() => { window.__exitNext = false; }, 3000); }
+  });
+  return true;
 };
 
 // ---------------- boot ----------------

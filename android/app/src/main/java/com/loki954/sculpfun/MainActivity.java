@@ -286,7 +286,7 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         web.evaluateJavascript("(window.__back && window.__back()) ? 'y' : 'n'", v -> {
-            if (v == null || !v.contains("y")) moveTaskToBack(true);
+            if (v == null || !v.contains("y")) finishAndRemoveTask();
         });
     }
 
@@ -394,6 +394,14 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void keepScreenOn(boolean on) { setKeepScreenOn(on); }
+
+        @JavascriptInterface
+        public void exit() {
+            runOnUiThread(() -> {
+                if (bt != null) bt.shutdown();
+                finishAndRemoveTask();
+            });
+        }
 
         @JavascriptInterface
         public void toast(final String msg) { runOnUiThread(() -> Toast.makeText(MainActivity.this, msg, Toast.LENGTH_SHORT).show()); }
