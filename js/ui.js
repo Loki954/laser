@@ -91,3 +91,23 @@ export function openSheet(title, ...content) {
   s.onclick = (e) => { if (e.target === s) closeSheet(); };
 }
 export function closeSheet() { document.getElementById('sheet').hidden = true; }
+
+// In-page replacements for confirm()/prompt() (those are blocked in some app views)
+export function ask(message, okLabel = 'OK', danger = false) {
+  return new Promise((resolve) => {
+    const done = (v) => { closeSheet(); resolve(v); };
+    openSheet(message, h('div', { class: 'btns' },
+      btn('Cancel', () => done(false)), btn(okLabel, () => done(true), danger ? 'danger' : 'primary')));
+    document.getElementById('sheet').onclick = (e) => { if (e.target.id === 'sheet') done(false); };
+  });
+}
+export function askText(message, placeholder = '') {
+  return new Promise((resolve) => {
+    const inp = h('input', { type: 'text', placeholder });
+    const done = (v) => { closeSheet(); resolve(v); };
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(inp.value.trim() || null); });
+    openSheet(message, inp, h('div', { class: 'btns', style: { marginTop: '10px' } },
+      btn('Cancel', () => done(null)), btn('Save', () => done(inp.value.trim() || null), 'primary')));
+    setTimeout(() => inp.focus(), 50);
+  });
+}

@@ -51,7 +51,11 @@ export async function getFont(id) {
   const meta = FONTS.find(f => f.id === id) || FONTS[0];
   let buf;
   if (meta.user) buf = await idbGet('fonts', meta.id);
-  else buf = await (await fetch(meta.file)).arrayBuffer();
+  else if (window.__FONTDATA && window.__FONTDATA[meta.id]) {
+    const bin = atob(window.__FONTDATA[meta.id]); const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    buf = u.buffer;
+  } else buf = await (await fetch(meta.file)).arrayBuffer();
   const font = opentype.parse(buf);
   cache.set(id, font);
   return font;

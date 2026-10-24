@@ -10,7 +10,7 @@ import { allPresets, savePreset, deletePreset } from './presets.js';
 import { svgToPolylines, polylinesToCommands } from './svg.js';
 import { polylinesBBox } from './geometry.js';
 import { idbGet, idbSet, idbDel, lsGet, lsSet } from './storage.js';
-import { h, section, row, num, field, range, select, seg, toggle, btn, toast, openSheet, closeSheet } from './ui.js';
+import { h, section, row, num, field, range, select, seg, toggle, btn, toast, openSheet, closeSheet, ask, askText } from './ui.js';
 import { VERSION } from './version.js';
 
 const MODELS = {
@@ -296,8 +296,8 @@ function opSettings(o, op) {
     Object.assign(ops, { power: p.power, speed: p.speed, passes: p.passes }, p.interval ? { interval: p.interval } : {});
     o._preview = null; app.commit(); app.changed(true); toast('Preset applied: ' + p.name);
   });
-  kids.push(h('div', { class: 'row' }, sel, btn('Save', () => {
-    const name = prompt('Name for this preset (e.g. "Birch 3mm cut"):');
+  kids.push(h('div', { class: 'row' }, sel, btn('Save', async () => {
+    const name = await askText('Name for this preset', 'e.g. Birch 3 mm cut');
     if (!name) return;
     savePreset({ name, op, power: ops.power, speed: ops.speed, passes: ops.passes, ...(op === 'fill' ? { interval: ops.interval } : {}) });
     toast('Preset saved'); renderPanel();
@@ -485,7 +485,7 @@ function machineTab() {
         btn(laserDot ? '🔴 Dot off' : '🔴 Laser dot', toggleDot),
         btn(c.air ? '💨 Air off' : '💨 Air on', () => { c.air = !c.air; saveCfg(); m.send(c.air ? 'M8' : 'M9').catch(() => { }); renderPanel(); }),
         btn('🔓 Unlock', () => m.send('$X')),
-        btn('🏠 Home', () => { if (confirm('Run homing ($H)? Only for machines with limit switches.')) m.send('$H', 60000).catch(e => toast(e.message, true)); }),
+        btn('🏠 Home', async () => { if (await ask('Run homing ($H)? Only for machines with limit switches.', 'Home')) m.send('$H', 60000).catch(e => toast(e.message, true)); }),
       ),
       h('div', { class: 'hint' }, 'Move the laser over the spot where the design should start, then tap "Set start here" — or just start; the current position is used as the start point.'),
     ));
@@ -579,7 +579,7 @@ function runTab() {
   const ctl = run.active
     ? h('div', { class: 'btns' },
       btn(m.status.state === 'Hold' ? '▶ Resume' : '⏸ Pause', () => { (m.status.state === 'Hold' ? m.resume() : m.pause()); setTimeout(renderPanel, 400); }),
-      btn('⏹ Stop', () => { if (confirm('Stop the job now?')) stopJob(); }, 'danger'))
+      btn('⏹ Stop', async () => { if (await ask('Stop the job now?', 'Stop', true)) stopJob(); }, 'danger'))
     : h('div', { class: 'btns' }, btn('▶ Start', startJob, 'primary full'));
   out.push(section('Run', lbl, prog, h('div', { style: { height: '8px' } }), ctl,
     !m.connected ? h('div', { class: 'hint warn' }, 'Not connected — go to the Machine tab.') : null,
@@ -725,7 +725,7 @@ function materialTest() {
 // ---------------- menu & settings ----------------
 function menu() {
   openSheet('Menu', h('div', { class: 'menu' },
-    h('button', { onclick: () => { closeSheet(); if (confirm('Start a new empty project?')) { app.objects = []; app.selectedId = null; app.commit(); app.changed(true); } } }, '🆕 New project'),
+    h('button', { onclick: async () => { closeSheet(); if (await ask('Start a new empty project? The current design is removed.', 'New project', true)) { app.objects = []; app.selectedId = null; app.commit(); app.changed(true); } } }, '🆕 New project'),
     h('button', { onclick: () => { closeSheet(); saveProject(); } }, '💾 Save project to file'),
     h('button', { onclick: () => { closeSheet(); $('#fileProject').click(); } }, '📂 Open project file'),
     h('button', { onclick: () => { closeSheet(); exportGcode(); } }, '⬇ Save G-code (.nc)'),
@@ -885,7 +885,7 @@ document.addEventListener('paste', (e) => { for (const it of e.clipboardData?.it
 // ---------------- updates (service worker) ----------------
 let swReg = null;
 async function setupSW() {
-  if (!('serviceWorker' in navigator)) return;
+  if (window.__BUNDLED || !('serviceWorker' in navigator)) return;
   try {
     swReg = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' });
     const onWaiting = (w) => {
@@ -905,6 +905,7 @@ async function setupSW() {
   } catch (e) { console.warn('SW', e); }
 }
 async function checkUpdate(manual) {
+  if (window.__BUNDLED) { if (manual) toast('This is the single-file version ' + VERSION + '. The installed web app updates itself.'); return; }
   try {
     const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' });
     const v = await r.json();
