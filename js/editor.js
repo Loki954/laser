@@ -93,7 +93,8 @@ export class Editor {
     if (app.machine.connected) this.drawHead();
     // selection
     const sel = app.selected();
-    if (sel && !job) this.drawSelection(sel);
+    if (app.groupSel && !job) this.drawGroup();
+    else if (sel && !job) this.drawSelection(sel);
     // drafts
     if (this.draft && this.draft.length) {
       ctx.save(); ctx.strokeStyle = col('--cut'); ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
@@ -211,6 +212,39 @@ export class Editor {
     const rot = [top[0] + Math.sin(ang) * 30, top[1] - Math.cos(ang) * 30];
     return { corners: cs, rot, top };
   }
+  groupObjects() { return this.app.objects.filter(o => o.visible !== false && !o.locked); }
+  groupBox() {
+    const objs = this.groupObjects();
+    if (!objs.length) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const o of objs) { const b = objWorldBBox(o); x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0); x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1); }
+    return { x0, y0, x1, y1, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+  }
+  groupHandles() {
+    const b = this.groupBox(); if (!b) return null;
+    const corners = [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1]].map(p => this.toScreen(p[0], p[1]));
+    const top = [(corners[0][0] + corners[1][0]) / 2, corners[0][1]];
+    return { b, corners, top, rot: [top[0], top[1] - 30] };
+  }
+  drawGroup() {
+    const { ctx } = this;
+    const h = this.groupHandles(); if (!h) return;
+    const acc = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    ctx.save(); ctx.strokeStyle = acc; ctx.lineWidth = 2; ctx.setLineDash([8, 5]);
+    ctx.beginPath(); h.corners.forEach((p, i) => i ? ctx.lineTo(...p) : ctx.moveTo(...p)); ctx.closePath(); ctx.stroke();
+    ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(...h.top); ctx.lineTo(...h.rot); ctx.stroke();
+    ctx.fillStyle = acc;
+    for (const p of h.corners) { ctx.beginPath(); ctx.rect(p[0] - 8, p[1] - 8, 16, 16); ctx.fill(); }
+    ctx.beginPath(); ctx.arc(h.rot[0], h.rot[1], 10, 0, 7); ctx.fill();
+    ctx.fillStyle = '#1a1200'; ctx.font = '14px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('⟳', h.rot[0], h.rot[1] + 1);
+    const txt = `All: ${(h.b.x1 - h.b.x0).toFixed(1)} × ${(h.b.y1 - h.b.y0).toFixed(1)} mm`;
+    ctx.textAlign = 'left'; ctx.font = '600 12px system-ui';
+    const tw = ctx.measureText(txt).width, bx = h.corners[2][0] - tw - 8, by = h.corners[2][1] + 12;
+    ctx.fillStyle = acc; ctx.fillRect(bx, by, tw + 10, 20); ctx.fillStyle = '#1a1200'; ctx.fillText(txt, bx + 5, by + 10);
+    ctx.restore();
+  }
+  snapshotGroup() { return this.groupObjects().map(o => ({ o, x: o.x, y: o.y, w: o.w, h: o.h, rot: o.rot || 0 })); }
+
   drawSelection(o) {
     const { ctx } = this;
     const cs = getComputedStyle(document.documentElement);
@@ -253,6 +287,17 @@ export class Editor {
     this.downAt = { p, t: Date.now() };
     if (app.tool === 'draw') { this.stroke = [w]; this.drag = { kind: 'draw' }; return; }
     if (app.tool === 'line') { this.drag = { kind: 'pan', start: p, view: { ...this.view }, tapLine: true }; return; }
+    if (app.groupSel && !app.previewOn) {
+      const gh = this.groupHandles();
+      if (gh) {
+        const c = [gh.b.cx, gh.b.cy];
+        if (Math.hypot(p[0] - gh.rot[0], p[1] - gh.rot[1]) < 26) { this.drag = { kind: 'grotate', c, a0: Math.atan2(w[0] - c[0], -(w[1] - c[1])), snap: this.snapshotGroup() }; return; }
+        for (const cc of gh.corners) if (Math.hypot(p[0] - cc[0], p[1] - cc[1]) < 26) { this.drag = { kind: 'gscale', c, d0: Math.hypot(w[0] - c[0], w[1] - c[1]) || 1, snap: this.snapshotGroup() }; return; }
+        if (w[0] >= gh.b.x0 && w[0] <= gh.b.x1 && w[1] >= gh.b.y0 && w[1] <= gh.b.y1) { this.drag = { kind: 'gmove', start: w, snap: this.snapshotGroup() }; return; }
+      }
+      this.drag = { kind: 'pan', start: p, view: { ...this.view }, tapEmpty: true };
+      return;
+    }
     const sel = app.selected();
     if (sel && !sel.locked && !app.previewOn) {
       const h = this.handles(sel);
@@ -302,6 +347,27 @@ export class Editor {
       return;
     }
     if (d.kind === 'draw') { const l = this.stroke[this.stroke.length - 1]; if (Math.hypot(w[0] - l[0], w[1] - l[1]) * this.view.s > 2) { this.stroke.push(w); this.render(); } return; }
+    if (d.kind === 'gmove') {
+      const dx = w[0] - d.start[0], dy = w[1] - d.start[1];
+      for (const q of d.snap) { q.o.x = q.x + dx; q.o.y = q.y + dy; }
+      d.moved = true; app.changed(false); return;
+    }
+    if (d.kind === 'gscale') {
+      const k = Math.max(0.02, Math.hypot(w[0] - d.c[0], w[1] - d.c[1]) / d.d0);
+      for (const q of d.snap) { q.o.w = Math.max(0.3, q.w * k); q.o.h = Math.max(0.01, q.h * k); q.o.x = d.c[0] + (q.x - d.c[0]) * k; q.o.y = d.c[1] + (q.y - d.c[1]) * k; }
+      d.moved = true; app.changed(false); return;
+    }
+    if (d.kind === 'grotate') {
+      let a = Math.atan2(w[0] - d.c[0], -(w[1] - d.c[1])) - d.a0;
+      let deg = a * 180 / Math.PI; const sn = Math.round(deg / 15) * 15; if (Math.abs(deg - sn) < 4) deg = sn;
+      const r = deg * Math.PI / 180, cs = Math.cos(r), sn2 = Math.sin(r);
+      for (const q of d.snap) {
+        const dx = q.x - d.c[0], dy = q.y - d.c[1];
+        q.o.x = d.c[0] + dx * cs - dy * sn2; q.o.y = d.c[1] + dx * sn2 + dy * cs;
+        q.o.rot = Math.round((((q.rot + deg) % 360) + 360) % 360 * 10) / 10;
+      }
+      d.moved = true; app.changed(false); return;
+    }
     if (d.kind === 'move') {
       d.o.x = w[0] - d.off[0]; d.o.y = w[1] - d.off[1];
       // snap to bed center lines
@@ -357,7 +423,7 @@ export class Editor {
       this.draft.push(w); app.lineDraftChanged(); this.render(); return;
     }
     if (d.kind === 'pan' && d.tapEmpty) { app.select(null); return; }
-    if ((d.kind === 'move' || d.kind === 'rotate' || d.kind === 'scale') && d.moved) app.commit();
+    if (['move', 'rotate', 'scale', 'gmove', 'gscale', 'grotate'].includes(d.kind) && d.moved) { app.commit(); if (app.groupSel) app.refreshPanel && app.refreshPanel(); }
     this.render();
   }
 }

@@ -48,6 +48,7 @@ app.machine.autoUnlock = app.cfg.autoUnlock;
 app.selected = () => app.objects.find(o => o.id === app.selectedId) || null;
 app.select = (id) => {
   app.selectedId = id;
+  app.groupSel = false;
   if (id && app.tab !== 'object') setTab('object'); else renderPanel();
   editor.render();
 };
@@ -193,6 +194,49 @@ async function addImageFile(file) {
   } catch (e) { toast('Could not open image: ' + e.message, true); }
 }
 
+app.selectAll = () => {
+  if (!app.objects.some(o => o.visible !== false)) return toast('Add something to the board first');
+  setTool('select');
+  app.selectedId = null; app.groupSel = true;
+  if (app.tab !== 'object') setTab('object'); else renderPanel();
+  editor.render();
+};
+app.refreshPanel = () => renderPanel();
+function scaleAll(k, about) {
+  const b = about || editor.groupBox(); if (!b) return;
+  for (const o of editor.groupObjects()) {
+    o.w = Math.max(0.3, o.w * k); o.h = Math.max(0.01, o.h * k);
+    o.x = b.cx + (o.x - b.cx) * k; o.y = b.cy + (o.y - b.cy) * k;
+  }
+  app.changed(true); app.commit();
+  editor.fitContent();
+}
+function moveAll(dx, dy) {
+  for (const o of editor.groupObjects()) { o.x += dx; o.y += dy; }
+  app.changed(true); app.commit(); editor.fitContent();
+}
+function groupPanel() {
+  const b = editor.groupBox();
+  if (!b) { app.groupSel = false; return objectTab(); }
+  const W = b.x1 - b.x0, H = b.y1 - b.y0, n = editor.groupObjects().length;
+  return [section('Whole design (' + n + ' object' + (n > 1 ? 's' : '') + ')',
+    h('div', { class: 'hint' }, 'Drag inside the dashed box to move everything. Drag a corner to make it bigger or smaller. ⟳ rotates it.'),
+    h('div', { class: 'grid2' },
+      field('Width mm', num(W, { min: 1, max: 2000, step: 1, onChange: (v) => scaleAll(v / W) })),
+      field('Height mm', num(H, { min: 1, max: 2000, step: 1, onChange: (v) => scaleAll(v / H) })),
+    ),
+    h('div', { class: 'btns', style: { marginTop: '8px' } },
+      btn('− 10%', () => scaleAll(0.9)), btn('+ 10%', () => scaleAll(1.1)),
+      btn('½', () => scaleAll(0.5)), btn('×2', () => scaleAll(2)),
+    ),
+    h('div', { class: 'btns', style: { marginTop: '8px' } },
+      btn('Center on bed', () => moveAll(app.cfg.bedW / 2 - b.cx, app.cfg.bedH / 2 - b.cy)),
+      btn('Done', () => app.select(null), 'primary'),
+    ),
+    h('div', { class: 'hint' }, 'Sizes keep their proportions. Hidden or locked objects are not changed.'),
+  )];
+}
+
 function deleteSel() {
   const o = app.selected(); if (!o) return;
   app.objects = app.objects.filter(x => x !== o);
@@ -307,6 +351,7 @@ function opSettings(o, op) {
 }
 
 function objectTab() {
+  if (app.groupSel) return groupPanel();
   const o = app.selected();
   if (!o) {
     return [h('div', { class: 'empty' },
@@ -721,7 +766,7 @@ function runTab() {
   else if (job) {
     const bb = job.worldBBox;
     sum.push(
-      h('div', { class: 'stat' }, h('span', {}, 'Job size'), h('b', {}, `${(bb.x1 - bb.x0).toFixed(1)} × ${(bb.y1 - bb.y0).toFixed(1)} mm`)),
+      h('div', { class: 'stat' }, h('span', {}, 'Job size'), h('b', {}, `${(bb.x1 - bb.x0).toFixed(1)} × ${(bb.y1 - bb.y0).toFixed(1)} mm `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); app.selectAll(); } }, 'resize'))),
       h('div', { class: 'stat' }, h('span', {}, 'Estimated time'), h('b', {}, '≈ ' + fmtTime(job.time))),
       h('div', { class: 'stat' }, h('span', {}, 'G-code'), h('b', {}, `${(job.bytes / 1024).toFixed(0)} KB · ${job.lines.toLocaleString()} lines`)),
     );
@@ -1022,7 +1067,7 @@ document.querySelectorAll('#tools [data-add]').forEach(b => b.onclick = () => {
   else if (k === 'image') $('#fileImage').click();
   else shapePicker();
 });
-document.querySelectorAll('#tools [data-act]').forEach(b => b.onclick = () => (b.dataset.act === 'undo' ? undo() : redo()));
+document.querySelectorAll('#tools [data-act]').forEach(b => b.onclick = () => (b.dataset.act === 'undo' ? undo() : b.dataset.act === 'all' ? app.selectAll() : redo()));
 document.querySelectorAll('[data-zoom]').forEach(b => b.onclick = () => {
   const z = b.dataset.zoom;
   if (z === 'fit') { app.objects.length ? editor.fitContent() : editor.fit(); }
@@ -1096,7 +1141,7 @@ window.__back = () => {
   if (!$('#sheet').hidden) { closeSheet(); return true; }
   if (app.previewOn) { togglePreview(); return true; }
   if (app.tool !== 'select') { setTool('select'); return true; }
-  if (app.selectedId) { app.select(null); return true; }
+  if (app.selectedId || app.groupSel) { app.select(null); return true; }
   return false;
 };
 
