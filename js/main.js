@@ -1,14 +1,14 @@
 import { Editor } from './editor.js';
 import { Machine } from './machine.js';
 import { SerialTransport, BleTransport, DemoTransport, AndroidTransport, onBtEvent } from './transport.js';
-import { newObject, invalidate, objWorldBBox, DEFAULT_OPS, cutAroundLocal, cutAroundWorld, localCommands, uid } from './scene.js';
+import { newObject, invalidate, objWorldBBox, DEFAULT_OPS, cutAroundLocal, cutAroundWorld, localCommands, uid, worldPolylines, objCorners } from './scene.js';
 import { SHAPES, CUT_AROUND } from './shapes.js';
 import { FONTS, getFont, loadUserFonts, addUserFont } from './text.js';
 import { DITHERS } from './raster.js';
 import { buildJob, jobOrigin, fmtTime } from './gcode.js';
 import { allPresets, savePreset, deletePreset, setLaserClass, laserClass, LASER_CLASSES, PRESETS } from './presets.js';
 import { svgToPolylines, polylinesToCommands } from './svg.js';
-import { polylinesBBox } from './geometry.js';
+import { polylinesBBox, simplify, simplifyClosed } from './geometry.js';
 import { idbGet, idbSet, idbDel, lsGet, lsSet } from './storage.js';
 import { h, section, row, num, field, range, select, seg, toggle, btn, toast, openSheet, closeSheet, ask, askText } from './ui.js';
 import { VERSION } from './version.js';
@@ -597,41 +597,68 @@ function moveSheetRefresh() { if (moveSheetOpen && !$('#sheet').hidden) moveShee
 let framing = false;
 function showWhereSheet() {
   const m = app.machine, c = app.cfg;
-  const offTxt = `${(+c.pointerDX).toFixed(1)}, ${(+c.pointerDY).toFixed(1)} mm`;
   openSheet('Show where it will engrave',
     !m.connected ? h('div', { class: 'btns', style: { marginBottom: '8px' } }, btn('Connect first', () => { closeSheet(); setTab('machine'); }, 'primary')) : null,
-    c.pointer
-      ? h('div', { class: 'hint' }, `Using the separate red pointer (offset ${offTxt}). `, h('a', { href: '#', onclick: (e) => { e.preventDefault(); c.pointer = false; saveCfg(); showWhereSheet(); } }, 'Use the blue laser instead'))
-      : h('div', {},
-        h('div', { class: 'hint' }, 'The blue laser moves around the design at very low power. It shows where the engraving goes without burning, like "Laser preview" in the SculpFun app.'),
-        row('Preview power', ...range(c.framePower, { min: 1, max: 30, step: 1, fmt: v => 'S' + v + ' (' + (v / c.sMax * 100).toFixed(1) + '%)', onChange: (v) => { c.framePower = v; c.pointerPower = v; saveCfg(); } })),
-        h('div', { class: 'hint' }, 'Too faint to see? Raise it a little. It starts burning at around S15–S30 depending on the material.'),
-      ),
-    h('div', { class: 'btns', style: { margin: '8px 0' } },
-      btn('⬚ Box around the design', () => runFrame(false), 'primary'),
-      btn('✎ Trace the outline', () => runFrame(true)),
+    h('div', { class: 'bigchoice' },
+      h('button', { onclick: () => { closeSheet(); runFrame('box'); } }, h('i', {}, '⬚'), h('b', {}, 'Box'), h('span', {}, 'The blue dot goes once around the whole design')),
+      h('button', { onclick: () => { closeSheet(); runFrame('all'); } }, h('i', {}, '✎'), h('b', {}, 'Whole design'), h('span', {}, 'The blue dot draws every line and outline of the job')),
     ),
-    row('Keep repeating', toggle(c.frameRepeat, (v) => { c.frameRepeat = v; saveCfg(); }), h('span', { class: 'hint' }, 'until you tap Stop')),
-    h('div', { class: 'btns' }, btn('⏹ Stop', stopFrame, 'danger'), btn('Move the laser…', () => { closeSheet(); moveSheet(); }), btn('Close', closeSheet)),
-    h('div', { class: 'hint' }, 'Move the ' + (c.pointer ? 'red pointer' : 'laser') + ' to where the design should start (' + ({ bl: 'bottom-left corner', center: 'center', tl: 'top-left corner', tr: 'top-right corner', br: 'bottom-right corner' }[c.anchor] || 'bed position') + '), then tap a button above.'),
+    h('div', { class: 'btns', style: { marginTop: '10px' } }, btn('⏹ Stop', stopFrame, 'danger'), btn('✥ Move the laser', () => { closeSheet(); moveSheet(); }), btn('Close', closeSheet)),
+    h('div', { class: 'hint' }, 'The laser runs very weak, so it doesn\'t burn. Put the laser where the design should start before you tap.'),
   );
 }
-async function runFrame(trace) {
+
+// Outlines of everything in the job, in G-code coordinates
+function jobOutlines(job) {
+  const [ox, oy] = job.origin;
+  const T = (p) => [p[0] - ox, oy - p[1]];
+  const out = [];
+  for (const o of app.objects) {
+    if (o.visible === false) continue;
+    if (o.type === 'image') out.push({ pts: objCorners(o), closed: true });
+    else for (const pl of worldPolylines(o, 0.1)) out.push(pl);
+    const ca = cutAroundWorld(o); if (ca) out.push(...ca);
+  }
+  const paths = out.map(pl => {
+    const pts = pl.closed ? simplifyClosed(pl.pts, 0.25) : simplify(pl.pts, 0.25);
+    return { pts: pts.map(T), closed: pl.closed };
+  }).filter(p => p.pts.length > 1);
+  // nearest-neighbour order so the head doesn't jump around
+  const res = []; let cur = [0, 0];
+  while (paths.length) {
+    let bi = 0, bd = Infinity;
+    paths.forEach((p, i) => { const d = Math.hypot(p.pts[0][0] - cur[0], p.pts[0][1] - cur[1]); if (d < bd) { bd = d; bi = i; } });
+    const p = paths.splice(bi, 1)[0]; res.push(p);
+    cur = p.closed ? p.pts[0] : p.pts[p.pts.length - 1];
+  }
+  return res;
+}
+
+async function runFrame(mode) {
   const m = app.machine;
-  if (!m.connected) { toast('Connect to the engraver first', true); return; }
+  if (!m.connected) { toast('Connect to the engraver first', true); setTab('machine'); return; }
   if (framing) return;
   let job; try { job = getJob(); } catch (e) { return toast(e.message, true); }
   const c = app.cfg;
   framing = true;
+  const sw = $('#btnShowWhere'); sw.innerHTML = '<i>⏹</i>Stop'; sw.onclick = stopFrame;
   try {
+    const usePointer = c.pointer && (+c.pointerDX || +c.pointerDY);
+    const opts = { power: c.framePower, feed: c.frameFeed, absolute: c.absolute, offset: [+c.pointerDX || 0, +c.pointerDY || 0], pointer: !!usePointer };
     do {
-      toast(trace ? 'Tracing the outline…' : 'Showing the box…');
-      const usePointer = c.pointer && (+c.pointerDX || +c.pointerDY);
-      const opts = { power: c.framePower, feed: c.frameFeed, absolute: c.absolute, offset: [+c.pointerDX || 0, +c.pointerDY || 0], pointer: !!usePointer };
-      if (trace) await m.trace(job.hull, opts); else await m.frame(job.gbox, opts);
+      if (mode === 'all') {
+        const paths = jobOutlines(job);
+        toast(`Drawing the whole design (${paths.length} lines)… tap ⏹ Stop to cancel`);
+        await m.tracePaths(paths, opts);
+      } else {
+        toast('Showing the box…');
+        await m.frame(job.gbox, opts);
+      }
     } while (framing && c.frameRepeat && m.connected && !m.cancelFrame);
-  } catch (e) { toast(e.message, true); try { await m.send('M5'); } catch (_) { } }
+    if (framing) toast('Done');
+  } catch (e) { if (framing) toast(e.message, true); try { await m.send('M5'); } catch (_) { } }
   framing = false; laserDot = false;
+  sw.innerHTML = '<i>🎯</i>Show where'; sw.onclick = showWhereSheet;
 }
 async function stopFrame() {
   const m = app.machine;
@@ -1006,6 +1033,8 @@ function settings() {
       row('Laser dot in Move', toggle(c.autoDot, (v) => { c.autoDot = v; saveCfg(); }), h('span', { class: 'hint' }, 'turn on the weak dot while the Move window is open')),
     ),
     section('Show where',
+      row('Preview power', ...range(c.framePower, { min: 1, max: 30, step: 1, fmt: v => 'S' + v, onChange: (v) => { c.framePower = v; c.pointerPower = v; saveCfg(); } })),
+      row('Keep repeating', toggle(c.frameRepeat, (v) => { c.frameRepeat = v; saveCfg(); }), h('span', { class: 'hint' }, 'until Stop')),
       row('Show with', seg([['laser', 'Blue laser (weak)'], ['pointer', 'Separate red pointer']], c.pointer ? 'pointer' : 'laser', (v) => { c.pointer = v === 'pointer'; saveCfg(); })),
       h('div', { class: 'grid2' }, field('Pointer offset X mm', n('pointerDX', { step: 0.1 })), field('Pointer offset Y mm', n('pointerDY', { step: 0.1 }))),
       h('div', { class: 'hint' }, 'Only for machines with an extra red pointer next to the laser. Most SculpFun models use the blue laser.'),

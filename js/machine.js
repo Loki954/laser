@@ -282,6 +282,31 @@ export class Machine {
     }
     await this.waitIdle(180000);
   }
+  // Draw several paths with the weak beam (G0 between paths = beam off)
+  async tracePaths(paths, { power = 3, feed = 3000, absolute = false, offset = [0, 0], pointer = false } = {}) {
+    if (!paths.length) return;
+    const [dx, dy] = pointer ? (offset || [0, 0]) : [0, 0];
+    const f = (v) => v.toFixed(2);
+    this.cancelFrame = false;
+    const lines = [this.originCmd({ absolute, offset: pointer ? [dx, dy] : [0, 0] }), 'G90 G21'];
+    if (!pointer) lines.push(`M3 S0`);
+    let first = true;
+    for (const p of paths) {
+      const pts = p.closed ? p.pts.concat([p.pts[0]]) : p.pts;
+      lines.push(`G0 X${f(pts[0][0] - dx)} Y${f(pts[0][1] - dy)}`);
+      pts.slice(1).forEach((q, i) => {
+        lines.push(`G1 X${f(q[0] - dx)} Y${f(q[1] - dy)}` + (pointer || i ? '' : ` S${power}`) + (first ? ` F${feed}` : ''));
+        first = false;
+      });
+    }
+    if (!pointer) lines.push('M5');
+    lines.push(`G0 X${f(-dx)} Y${f(-dy)}`);
+    for (const l of lines) {
+      if (this.cancelFrame) return;
+      await this.send(l, 60000);
+    }
+    await this.waitIdle(600000);
+  }
   async stopMotion() {
     this.cancelFrame = true;
     await this.realtime('!');

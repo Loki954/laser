@@ -137,3 +137,10 @@ input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
 .stagebtns button { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line-c); background: color-mix(in srgb, var(--panel) 92%, transparent); border-radius: 10px; padding: 7px 11px; font-weight: 700; font-size: 13px; color: var(--text); }
 .stagebtns button i { font-style: normal; font-size: 16px; }
 .stagebtns button:first-child { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+
+.bigchoice { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.bigchoice button { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 18px 10px; border-radius: 14px; border: 2px solid var(--accent); background: var(--card); color: var(--text); text-align: center; }
+.bigchoice button i { font-style: normal; font-size: 34px; line-height: 1; color: var(--accent); }
+.bigchoice button b { font-size: 17px; }
+.bigchoice button span { font-size: 12.5px; color: var(--muted); }
+.bigchoice button:active { background: var(--accent); color: var(--accent-ink); }
