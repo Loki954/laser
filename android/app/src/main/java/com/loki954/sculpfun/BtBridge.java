@@ -185,20 +185,24 @@ public class BtBridge {
                 BluetoothDevice dev = adapter.getRemoteDevice(address);
                 BluetoothSocket s = null;
                 Exception last = null;
-                for (int attempt = 0; attempt < 3 && s == null; attempt++) {
+                // Same as the original SculpFun app: an *insecure* RFCOMM link, so no pairing / PIN is needed.
+                boolean bonded = dev.getBondState() == BluetoothDevice.BOND_BONDED;
+                int attempts = bonded ? 5 : 4;
+                for (int attempt = 0; attempt < attempts && s == null; attempt++) {
                     BluetoothSocket t = null;
                     try {
-                        if (attempt == 0) t = dev.createRfcommSocketToServiceRecord(SPP);
-                        else if (attempt == 1) t = dev.createInsecureRfcommSocketToServiceRecord(SPP);
-                        else {
-                            Method m = dev.getClass().getMethod("createRfcommSocket", int.class);
+                        if (attempt <= 1) t = dev.createInsecureRfcommSocketToServiceRecord(SPP);
+                        else if (attempt == 2) {
+                            Method m = dev.getClass().getMethod("createInsecureRfcommSocket", int.class);
                             t = (BluetoothSocket) m.invoke(dev, 1);
-                        }
+                        } else if (attempt == 3) t = dev.createInsecureRfcommSocketToServiceRecord(SPP);
+                        else t = dev.createRfcommSocketToServiceRecord(SPP); // only for already-paired devices
                         t.connect();
                         s = t;
                     } catch (Exception e) {
                         last = e;
                         try { if (t != null) t.close(); } catch (Exception ignored) { }
+                        try { Thread.sleep(600); } catch (InterruptedException ignored) { }
                     }
                 }
                 if (s == null) throw new Exception("Could not connect: " + (last != null ? last.getMessage() : "unknown"));

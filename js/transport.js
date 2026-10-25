@@ -230,7 +230,7 @@ export class AndroidTransport extends Base {
   static supported() { return typeof window !== 'undefined' && !!window.AndroidBT; }
   connect() {
     return new Promise((resolve, reject) => {
-      const to = setTimeout(() => { off(); reject(new Error('Connection timed out. Is the engraver on and nearby?')); }, 25000);
+      const to = setTimeout(() => { off(); reject(new Error('Connection timed out. Is the engraver on and nearby? Close the SculpFun app if it is open.')); }, 45000);
       const off = onBtEvent((ev) => {
         if (ev.type === 'open') { clearTimeout(to); this.connected = true; this.name = ev.name || this.name; resolve(); }
         else if (ev.type === 'error' && !this.connected) { clearTimeout(to); off(); reject(new Error(ev.message)); }
