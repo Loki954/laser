@@ -264,56 +264,42 @@ export class Machine {
     const pts = [[b.x0, b.y0], [b.x1, b.y0], [b.x1, b.y1], [b.x0, b.y1], [b.x0, b.y0]];
     return this.trace(pts, { power, feed, absolute, offset, pointer, closed: false });
   }
-  async trace(pts, { power = 3, feed = 3000, absolute = false, offset = [0, 0], pointer = false, closed = true } = {}) {
+  async trace(pts, opts = {}) {
     if (!pts.length) return;
-    const [dx, dy] = pointer ? (offset || [0, 0]) : [0, 0];
-    const f = (v) => v.toFixed(2);
-    this.cancelFrame = false;
-    const path = closed ? pts.concat([pts[0]]) : pts;
-    // Normal G-code moves: the firmware turns the beam on only while moving and runs everything in order.
-    const lines = [this.originCmd({ absolute, offset: pointer ? [dx, dy] : [0, 0] }), 'G90 G21', `G0 X${f(path[0][0] - dx)} Y${f(path[0][1] - dy)}`];
-    if (!pointer) lines.push(`M3 S${power}`);
-    path.slice(1).forEach((p, i) => lines.push(`G1 X${f(p[0] - dx)} Y${f(p[1] - dy)}` + (pointer ? '' : ` S${power}`) + (i === 0 ? ` F${feed}` : '')));
-    if (!pointer) lines.push('M5');
-    lines.push(`G0 X${f(-dx)} Y${f(-dy)}`);
-    for (const l of lines) {
-      if (this.cancelFrame) return;
-      await this.send(l, 60000);
-    }
-    await this.waitIdle(180000);
+    const closed = opts.closed !== false;
+    return this.tracePaths([{ pts, closed }], opts);
   }
-  // Draw several paths with the weak beam (G0 between paths = beam off)
+  // Show paths with the weak blue dot. Same method as the "Laser dot" button (M3 S + G1 F1000),
+  // then jog moves; the dot stays on while the head moves.
   async tracePaths(paths, { power = 3, feed = 3000, absolute = false, offset = [0, 0], pointer = false } = {}) {
     if (!paths.length) return;
     const [dx, dy] = pointer ? (offset || [0, 0]) : [0, 0];
     const f = (v) => v.toFixed(2);
     this.cancelFrame = false;
-    const lines = [this.originCmd({ absolute, offset: pointer ? [dx, dy] : [0, 0] }), 'G90 G21'];
-    if (!pointer) lines.push(`M3 S0`);
-    let first = true;
+    await this.send(this.originCmd({ absolute, offset: pointer ? [dx, dy] : [0, 0] }));
+    const first = paths[0].pts[0];
+    await this.send(`$J=G90 X${f(first[0] - dx)} Y${f(first[1] - dy)} F${feed}`);
+    await this.waitIdle(60000);
+    if (this.cancelFrame) return;
+    if (!pointer) await this.send(`M3 S${power}\nG1 F1000`);
     for (const p of paths) {
       const pts = p.closed ? p.pts.concat([p.pts[0]]) : p.pts;
-      lines.push(`G0 X${f(pts[0][0] - dx)} Y${f(pts[0][1] - dy)}`);
-      pts.slice(1).forEach((q, i) => {
-        lines.push(`G1 X${f(q[0] - dx)} Y${f(q[1] - dy)}` + (pointer || i ? '' : ` S${power}`) + (first ? ` F${feed}` : ''));
-        first = false;
-      });
-    }
-    if (!pointer) lines.push('M5');
-    lines.push(`G0 X${f(-dx)} Y${f(-dy)}`);
-    for (const l of lines) {
-      if (this.cancelFrame) return;
-      await this.send(l, 60000);
+      for (const q of pts) {
+        if (this.cancelFrame) return;
+        await this.send(`$J=G90 X${f(q[0] - dx)} Y${f(q[1] - dy)} F${feed}`, 60000);
+      }
     }
     await this.waitIdle(600000);
+    if (!pointer) await this.send('M5');
+    if (this.cancelFrame) return;
+    await this.send(`$J=G90 X${f(-dx)} Y${f(-dy)} F${feed}`);
+    await this.waitIdle(60000);
   }
   async stopMotion() {
     this.cancelFrame = true;
-    await this.realtime('!');
-    await sleep(200);
-    await this.realtime('\x18');
-    await sleep(900);
+    await this.realtime(String.fromCharCode(0x85)); // jog cancel
+    await sleep(400);
     this.waiters.splice(0).forEach(w => w.reject(new Error('Stopped')));
-    try { await this.t.write('$X\nM5\n'); } catch (e) { }
+    try { await this.t.write('M5\n'); } catch (e) { }
   }
 }

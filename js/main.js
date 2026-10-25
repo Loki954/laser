@@ -567,7 +567,8 @@ function movePanel() {
     ),
     h('div', { class: 'btns', style: { marginTop: '8px' } },
       btn('⏹ Stop moving', () => m.connected && m.realtime(String.fromCharCode(0x85))),
-      btn(laserDot ? '🔴 Laser dot off' : '🔴 Laser dot', toggleDot),
+      btn('🎯 Trace', () => { closeSheet(); showWhereSheet(); }, 'primary'),
+      btn(laserDot ? '🔵 Dot off' : '🔵 Dot', toggleDot),
       btn(c.air ? '💨 Air off' : '💨 Air on', () => { c.air = !c.air; saveCfg(); if (m.connected) m.send(c.air ? 'M8' : 'M9').catch(() => { }); renderPanel(); moveSheetRefresh(); }),
       btn('🔓 Unlock', () => go(m.send('$X'))),
       btn('📍 Go to start', toStart),
@@ -575,7 +576,7 @@ function movePanel() {
     h('div', { class: 'hint' }, c.hasHoming ? '🏠 Home drives to the corner with the limit switches ($H). 📍 Go to start returns to where the last job started.'
       : '🏠 Home returns to the start point (Homing is off in Settings).'),
     row('Laser dot while moving', toggle(c.autoDot, (v) => { c.autoDot = v; saveCfg(); })),
-    h('div', { class: 'hint' }, 'The job always starts where the ' + (c.pointer ? 'red pointer' : 'laser') + ' is when you press Start or Show where.'),
+    h('div', { class: 'hint' }, 'The job always starts where the ' + (c.pointer ? 'red pointer' : 'laser') + ' is when you press Start or Trace.'),
   ];
 }
 let moveSheetOpen = false;
@@ -597,11 +598,11 @@ function moveSheetRefresh() { if (moveSheetOpen && !$('#sheet').hidden) moveShee
 let framing = false;
 function showWhereSheet() {
   const m = app.machine, c = app.cfg;
-  openSheet('Show where it will engrave',
+  openSheet('Trace – what should the blue dot show?',
     !m.connected ? h('div', { class: 'btns', style: { marginBottom: '8px' } }, btn('Connect first', () => { closeSheet(); setTab('machine'); }, 'primary')) : null,
     h('div', { class: 'bigchoice' },
-      h('button', { onclick: () => { closeSheet(); runFrame('box'); } }, h('i', {}, '⬚'), h('b', {}, 'Box'), h('span', {}, 'The blue dot goes once around the whole design')),
-      h('button', { onclick: () => { closeSheet(); runFrame('all'); } }, h('i', {}, '✎'), h('b', {}, 'Whole design'), h('span', {}, 'The blue dot draws every line and outline of the job')),
+      h('button', { onclick: () => { closeSheet(); runFrame('box'); } }, h('i', {}, '⬚'), h('b', {}, 'Box'), h('span', {}, 'A box around everything that will be engraved')),
+      h('button', { onclick: () => { closeSheet(); runFrame('all'); } }, h('i', {}, '✎'), h('b', {}, 'Outline'), h('span', {}, 'Traces the outline of every letter, shape and cut line')),
     ),
     h('div', { class: 'btns', style: { marginTop: '10px' } }, btn('⏹ Stop', stopFrame, 'danger'), btn('✥ Move the laser', () => { closeSheet(); moveSheet(); }), btn('Close', closeSheet)),
     h('div', { class: 'hint' }, 'The laser runs very weak, so it doesn\'t burn. Put the laser where the design should start before you tap.'),
@@ -648,7 +649,7 @@ async function runFrame(mode) {
     do {
       if (mode === 'all') {
         const paths = jobOutlines(job);
-        toast(`Drawing the whole design (${paths.length} lines)… tap ⏹ Stop to cancel`);
+        toast(`Tracing the outline (${paths.length} parts)… tap ⏹ Stop to cancel`);
         await m.tracePaths(paths, opts);
       } else {
         toast('Showing the box…');
@@ -658,7 +659,7 @@ async function runFrame(mode) {
     if (framing) toast('Done');
   } catch (e) { if (framing) toast(e.message, true); try { await m.send('M5'); } catch (_) { } }
   framing = false; laserDot = false;
-  sw.innerHTML = '<i>🎯</i>Show where'; sw.onclick = showWhereSheet;
+  sw.innerHTML = '<i>🎯</i>Trace'; sw.onclick = showWhereSheet;
 }
 async function stopFrame() {
   const m = app.machine;
@@ -852,7 +853,7 @@ function runTab() {
   sum.push(row('Air assist', toggle(c.air, (v) => { c.air = v; saveCfg(); })));
   sum.push(h('div', { class: 'btns' },
     btn(app.previewOn ? 'Hide preview' : '👁 Preview path', togglePreview),
-    btn('🎯 Show where', showWhereSheet),
+    btn('🎯 Trace', showWhereSheet),
   ));
   out.push(section('Job', ...sum));
 
@@ -1032,7 +1033,7 @@ function settings() {
       row('Homing', toggle(c.hasHoming, (v) => { c.hasHoming = v; saveCfg(); }), h('span', { class: 'hint' }, 'machine has limit switches ($H)')),
       row('Laser dot in Move', toggle(c.autoDot, (v) => { c.autoDot = v; saveCfg(); }), h('span', { class: 'hint' }, 'turn on the weak dot while the Move window is open')),
     ),
-    section('Show where',
+    section('Trace',
       row('Preview power', ...range(c.framePower, { min: 1, max: 30, step: 1, fmt: v => 'S' + v, onChange: (v) => { c.framePower = v; c.pointerPower = v; saveCfg(); } })),
       row('Keep repeating', toggle(c.frameRepeat, (v) => { c.frameRepeat = v; saveCfg(); }), h('span', { class: 'hint' }, 'until Stop')),
       row('Show with', seg([['laser', 'Blue laser (weak)'], ['pointer', 'Separate red pointer']], c.pointer ? 'pointer' : 'laser', (v) => { c.pointer = v === 'pointer'; saveCfg(); })),
@@ -1086,7 +1087,7 @@ function help() {
       h('li', {}, 'Add text, an image or a shape. Or tap "Lines" / "Draw" to draw cut lines.'),
       h('li', {}, 'Select it and choose Engrave or Cut in the Object tab. Turn on "Cut around" to cut it out as a heart, circle…'),
       h('li', {}, 'Machine tab → Connect → pick your SculpFun. Tap ✥ Move to put the laser (or red pointer) where the design should start.'),
-      h('li', {}, 'Tap 🎯 Show where to see the outline on the material.'),
+      h('li', {}, 'Tap 🎯 Trace to see the box or outline on the material with the blue dot.'),
       h('li', {}, 'Run tab → Start.'),
     ),
     h('p', { class: 'hint' }, 'Tip: install this app from Chrome\'s menu → "Add to Home screen". It updates itself automatically.'),
