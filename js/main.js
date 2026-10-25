@@ -610,7 +610,8 @@ async function runFrame(trace) {
   try {
     do {
       toast(trace ? 'Tracing the outline…' : 'Showing the box…');
-      const opts = { power: c.framePower, feed: c.frameFeed, absolute: c.absolute, offset: [+c.pointerDX || 0, +c.pointerDY || 0], pointer: c.pointer };
+      const usePointer = c.pointer && (+c.pointerDX || +c.pointerDY);
+      const opts = { power: c.framePower, feed: c.frameFeed, absolute: c.absolute, offset: [+c.pointerDX || 0, +c.pointerDY || 0], pointer: !!usePointer };
       if (trace) await m.trace(job.hull, opts); else await m.frame(job.gbox, opts);
     } while (framing && c.frameRepeat && m.connected && !m.cancelFrame);
   } catch (e) { toast(e.message, true); try { await m.send('M5'); } catch (_) { } }
@@ -620,9 +621,7 @@ async function stopFrame() {
   const m = app.machine;
   framing = false;
   if (!m.connected) return;
-  m.cancelFrame = true;
-  await m.realtime(String.fromCharCode(0x85)); // jog cancel
-  try { await m.send('M5'); } catch (e) { }
+  await m.stopMotion();
   toast('Stopped');
 }
 function pointerCalibration() {

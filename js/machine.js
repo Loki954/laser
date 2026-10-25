@@ -137,12 +137,16 @@ export class Machine {
     this.emit('line', { dir: 'out', text: ch === '\x18' ? '[reset]' : ch.charCodeAt(0) >= 0x80 ? '[0x' + ch.charCodeAt(0).toString(16) + ']' : ch });
     return this.t.write(typeof ch === 'string' && ch.charCodeAt(0) >= 0x80 ? new Uint8Array([ch.charCodeAt(0)]) : ch);
   }
+  // Wait until the machine has finished moving. Asks for fresh status reports so an old "Idle" isn't trusted.
   async waitIdle(timeout = 120000) {
     const t0 = Date.now();
-    await sleep(700);
+    let idleCount = 0, seenBusy = false;
     while (Date.now() - t0 < timeout) {
-      if (this.status.state === 'Idle') return true;
-      await sleep(250);
+      if (this.connected) await this.t.write('?').catch(() => { });
+      await sleep(300);
+      const st = this.status.state;
+      if (st === 'Idle') idleCount++; else { idleCount = 0; seenBusy = true; }
+      if (idleCount >= (seenBusy ? 1 : 3) && Date.now() - t0 > 600) return true;
     }
     return false;
   }
@@ -265,19 +269,26 @@ export class Machine {
     const [dx, dy] = pointer ? (offset || [0, 0]) : [0, 0];
     const f = (v) => v.toFixed(2);
     this.cancelFrame = false;
-    await this.send(this.originCmd({ absolute, offset: pointer ? [dx, dy] : [0, 0] }));
     const path = closed ? pts.concat([pts[0]]) : pts;
-    // move to the first corner with the beam off
-    await this.send(`$J=G90 X${f(path[0][0] - dx)} Y${f(path[0][1] - dy)} F${feed}`);
-    await this.waitIdle(60000);
-    if (!pointer) await this.send(`M3 S${power}`);
-    for (const p of path.slice(1)) {
-      if (this.cancelFrame) break;
-      await this.send(`$J=G90 X${f(p[0] - dx)} Y${f(p[1] - dy)} F${feed}`);
+    // Normal G-code moves: the firmware turns the beam on only while moving and runs everything in order.
+    const lines = [this.originCmd({ absolute, offset: pointer ? [dx, dy] : [0, 0] }), 'G90 G21', `G0 X${f(path[0][0] - dx)} Y${f(path[0][1] - dy)}`];
+    if (!pointer) lines.push(`M3 S${power}`);
+    path.slice(1).forEach((p, i) => lines.push(`G1 X${f(p[0] - dx)} Y${f(p[1] - dy)}` + (pointer ? '' : ` S${power}`) + (i === 0 ? ` F${feed}` : '')));
+    if (!pointer) lines.push('M5');
+    lines.push(`G0 X${f(-dx)} Y${f(-dy)}`);
+    for (const l of lines) {
+      if (this.cancelFrame) return;
+      await this.send(l, 60000);
     }
-    await this.waitIdle(120000);
-    if (!pointer) await this.send('M5');
-    await this.send(`$J=G90 X${f(-dx)} Y${f(-dy)} F${feed}`);
-    await this.waitIdle(60000);
+    await this.waitIdle(180000);
+  }
+  async stopMotion() {
+    this.cancelFrame = true;
+    await this.realtime('!');
+    await sleep(200);
+    await this.realtime('\x18');
+    await sleep(900);
+    this.waiters.splice(0).forEach(w => w.reject(new Error('Stopped')));
+    try { await this.t.write('$X\nM5\n'); } catch (e) { }
   }
 }
