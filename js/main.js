@@ -1131,8 +1131,41 @@ function shapePicker() {
 }
 
 // ---------------- status pill & machine events ----------------
+// ---------------- emergency stop ----------------
+const estop = $('#estop');
+async function emergencyStop() {
+  const m = app.machine;
+  if (!m.connected) return;
+  framing = false; laserDot = false;
+  m.cancelFrame = true; m.cancelUpload = true;
+  if (m.streaming) m.streaming.cancelled = true;
+  try { await m.realtime('!'); } catch (e) { }            // feed hold: stop moving now
+  try { await m.realtime(String.fromCharCode(0x85)); } catch (e) { } // cancel jog
+  await new Promise(r => setTimeout(r, 150));
+  try { await m.realtime('\x18'); } catch (e) { }         // reset: laser off, job aborted
+  await new Promise(r => setTimeout(r, 900));
+  m.jobActive = false;
+  m.waiters.splice(0).forEach(w => w.reject(new Error('Emergency stop')));
+  try { await m.t.write('$X\nM5\n'); } catch (e) { }
+  app.run = { active: false, lastMsg: 'Emergency stop' };
+  const sw = $('#btnShowWhere'); sw.innerHTML = '<i>🎯</i>Trace'; sw.onclick = showWhereSheet;
+  toast('EMERGENCY STOP — laser off, job cancelled', true);
+  try { navigator.vibrate && navigator.vibrate(300); } catch (e) { }
+  renderPanel(); updateEstop();
+}
+estop.onclick = emergencyStop;
+function updateEstop() {
+  const m = app.machine;
+  const on = m.connected;
+  estop.hidden = !on;
+  document.body.classList.toggle('has-estop', on);
+  const st = m.status.state;
+  estop.classList.toggle('busy', on && (app.run.active || framing || st === 'Run' || st === 'Jog' || st === 'Hold'));
+}
+
 const pill = $('#statusPill');
 function updatePill() {
+  updateEstop();
   const m = app.machine, s = m.status;
   let cls = 'off', txt = '● Not connected';
   if (m.connected) {
