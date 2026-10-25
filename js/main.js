@@ -6,7 +6,7 @@ import { SHAPES, CUT_AROUND } from './shapes.js';
 import { FONTS, getFont, loadUserFonts, addUserFont } from './text.js';
 import { DITHERS } from './raster.js';
 import { buildJob, jobOrigin, fmtTime } from './gcode.js';
-import { allPresets, savePreset, deletePreset } from './presets.js';
+import { allPresets, savePreset, deletePreset, setLaserClass, laserClass, LASER_CLASSES, PRESETS } from './presets.js';
 import { svgToPolylines, polylinesToCommands } from './svg.js';
 import { polylinesBBox } from './geometry.js';
 import { idbGet, idbSet, idbDel, lsGet, lsSet } from './storage.js';
@@ -14,12 +14,12 @@ import { h, section, row, num, field, range, select, seg, toggle, btn, toast, op
 import { VERSION } from './version.js';
 
 const MODELS = {
-  s9: { name: 'SculpFun S9 / S10', w: 410, h: 400 },
-  s30: { name: 'SculpFun S30 / S30 Pro', w: 410, h: 400 },
-  s30max: { name: 'SculpFun S30 Pro Max / Ultra', w: 600, h: 600 },
-  sf_a9: { name: 'SculpFun SF-A9', w: 400, h: 400 },
-  icube: { name: 'SculpFun iCube', w: 130, h: 130 },
-  ts1: { name: 'SculpFun TS1', w: 300, h: 300 },
+  s9: { name: 'SculpFun S9 / S10', w: 410, h: 400, laser: 5 },
+  s30: { name: 'SculpFun S30 / S30 Pro', w: 410, h: 400, laser: 10 },
+  s30max: { name: 'SculpFun S30 Pro Max / Ultra', w: 600, h: 600, laser: 20 },
+  sf_a9: { name: 'SculpFun SF-A9', w: 400, h: 400, laser: 20 },
+  icube: { name: 'SculpFun iCube', w: 130, h: 130, laser: 5 },
+  ts1: { name: 'SculpFun TS1', w: 300, h: 300, laser: 10 },
   custom: { name: 'Custom size', w: 400, h: 400 },
 };
 
@@ -27,7 +27,7 @@ const DEFAULT_CFG = {
   model: 's9', bedW: 410, bedH: 400, sMax: 1000, framePower: 3, frameFeed: 3000, pointerPower: 3,
   anchor: 'bl', absolute: false, air: false, overscan: 1, bidir: true, autoUnlock: true,
   transfer: 'upload', fileName: 'studio.nc', bleChunk: 20, rxBuffer: 120, jogStep: 10, jogFeed: 3000,
-  pointer: false, pointerDX: 0, pointerDY: 0, hasHoming: false, burnPower: 200, frameRepeat: false,
+  pointer: false, pointerDX: 0, pointerDY: 0, hasHoming: true, autoDot: true, burnPower: 200, frameRepeat: false,
 };
 
 const app = window.app = {
@@ -43,6 +43,9 @@ const $ = (s) => document.querySelector(s);
 const tabbody = $('#tabbody');
 const editor = new Editor($('#cv'), app);
 app.machine.autoUnlock = app.cfg.autoUnlock;
+if (!app.cfg.laserW) app.cfg.laserW = (MODELS[app.cfg.model] && MODELS[app.cfg.model].laser) || 10;
+setLaserClass(app.cfg.laserW);
+if (!app.cfg.mig1) { app.cfg.hasHoming = true; app.cfg.autoDot = true; app.cfg.mig1 = true; lsSet('cfg', app.cfg); }
 
 // ---------------- scene management ----------------
 app.selected = () => app.objects.find(o => o.id === app.selectedId) || null;
@@ -333,13 +336,14 @@ function opSettings(o, op) {
   }
   // presets
   const list = allPresets(op);
-  const opts = [['', 'Material presets…']];
+  const opts = [['', `Material presets (${laserClass()} W laser)…`]];
   list.forEach((p, i) => opts.push([String(i), (p.user ? '★ ' : '') + `${p.name}  (${p.power}% · ${p.speed} · ×${p.passes})`]));
   const sel = select(opts, '', (v) => {
     if (v === '') return;
     const p = list[+v];
     Object.assign(ops, { power: p.power, speed: p.speed, passes: p.passes }, p.interval ? { interval: p.interval } : {});
-    o._preview = null; app.commit(); app.changed(true); toast('Preset applied: ' + p.name);
+    if (p.air && !app.cfg.air) { app.cfg.air = true; saveCfg(); }
+    o._preview = null; app.commit(); app.changed(true); toast('Preset applied: ' + p.name + (p.air ? ' · air assist on' : ''));
   });
   kids.push(h('div', { class: 'row' }, sel, btn('Save', async () => {
     const name = await askText('Name for this preset', 'e.g. Birch 3 mm cut');
@@ -437,9 +441,9 @@ function objectTab() {
         field('Passes', num(ca.passes, { min: 1, max: 50, onInput: live(o, v => ca.passes = Math.round(v), false), onChange: done })),
       ),
       (() => {
-        const list = allPresets('cut'); const opts = [['', 'Cut presets…']];
+        const list = allPresets('cut'); const opts = [['', `Cut presets (${laserClass()} W laser)…`]];
         list.forEach((p, i) => opts.push([String(i), (p.user ? '★ ' : '') + `${p.name} (${p.power}% · ${p.speed} · ×${p.passes})`]));
-        return h('div', { class: 'row' }, select(opts, '', (v) => { if (v === '') return; const p = list[+v]; Object.assign(ca, { power: p.power, speed: p.speed, passes: p.passes }); app.changed(true); done(); }));
+        return h('div', { class: 'row' }, select(opts, '', (v) => { if (v === '') return; const p = list[+v]; Object.assign(ca, { power: p.power, speed: p.speed, passes: p.passes }); if (p.air && !app.cfg.air) { app.cfg.air = true; saveCfg(); } app.changed(true); done(); toast('Preset applied: ' + p.name); }));
       })(),
       h('div', { class: 'hint' }, 'The red dashed line is cut last, after everything inside is finished.'),
       h('div', { class: 'btns' }, btn('Make it a separate shape (to edit it freely)', () => detachCutAround(o))),
@@ -546,15 +550,19 @@ function movePanel() {
   const J = (dx, dy) => () => { if (!m.connected) return toast('Connect to the engraver first', true); go(m.jog(dx * c.jogStep, dy * c.jogStep, c.jogFeed)); };
   const home = async () => {
     if (!m.connected) return toast('Connect to the engraver first', true);
-    if (c.hasHoming) { toast('Homing…'); go(m.send('$H', 90000)); }
-    else go(m.send('$J=G90 X0 Y0 F' + c.jogFeed));
+    if (c.hasHoming) {
+      toast('Homing… the head drives to the limit switches');
+      try { await m.send('$H', 120000); toast('Home ✔'); }
+      catch (e) { toast('Homing failed: ' + e.message + '. If your machine has no limit switches, turn off "Homing" in Settings.', true); }
+    } else go(m.send('$J=G90 X0 Y0 F' + c.jogFeed));
   };
+  const toStart = () => { if (!m.connected) return toast('Connect to the engraver first', true); go(m.send('$J=G90 X0 Y0 F' + c.jogFeed)); };
   return [
     row('Step', seg([['0.1', '0.1'], ['1', '1'], ['10', '10'], ['50', '50 mm']], c.jogStep, (v) => { c.jogStep = +v; saveCfg(); })),
     row('Speed', num(c.jogFeed, { min: 100, max: 10000, step: 100, onChange: (v) => { c.jogFeed = v; saveCfg(); } }), h('span', { class: 'hint' }, 'mm/min')),
     h('div', { class: 'jog' },
       btn('↖', J(-1, 1)), btn('↑', J(0, 1)), btn('↗', J(1, 1)),
-      btn('←', J(-1, 0)), h('button', { class: 'c', onclick: home }, c.hasHoming ? '🏠 Home' : '🏠 Start'), btn('→', J(1, 0)),
+      btn('←', J(-1, 0)), h('button', { class: 'c', onclick: home }, '🏠 Home'), btn('→', J(1, 0)),
       btn('↙', J(-1, -1)), btn('↓', J(0, -1)), btn('↘', J(1, -1)),
     ),
     h('div', { class: 'btns', style: { marginTop: '8px' } },
@@ -562,20 +570,28 @@ function movePanel() {
       btn(laserDot ? '🔴 Laser dot off' : '🔴 Laser dot', toggleDot),
       btn(c.air ? '💨 Air off' : '💨 Air on', () => { c.air = !c.air; saveCfg(); if (m.connected) m.send(c.air ? 'M8' : 'M9').catch(() => { }); renderPanel(); moveSheetRefresh(); }),
       btn('🔓 Unlock', () => go(m.send('$X'))),
-      c.hasHoming ? btn('Go to start', () => go(m.send('$J=G90 X0 Y0 F' + c.jogFeed))) : null,
+      btn('📍 Go to start', toStart),
     ),
-    h('div', { class: 'hint' }, c.hasHoming ? '🏠 Home drives to the limit switches. "Go to start" returns to where the last job started.'
-      : '🏠 Start returns the head to where the last job or frame started. Machine has limit switches? Turn on "Homing" in Settings.'),
+    h('div', { class: 'hint' }, c.hasHoming ? '🏠 Home drives to the corner with the limit switches ($H). 📍 Go to start returns to where the last job started.'
+      : '🏠 Home returns to the start point (Homing is off in Settings).'),
+    row('Laser dot while moving', toggle(c.autoDot, (v) => { c.autoDot = v; saveCfg(); })),
     h('div', { class: 'hint' }, 'The job always starts where the ' + (c.pointer ? 'red pointer' : 'laser') + ' is when you press Start or Show where.'),
   ];
 }
 let moveSheetOpen = false;
 function moveSheet() {
   moveSheetOpen = true;
-  const m = app.machine;
+  const m = app.machine, c = app.cfg;
   openSheet('Move the laser', !m.connected ? h('div', { class: 'btns', style: { marginBottom: '8px' } }, btn('Connect first', () => { closeSheet(); setTab('machine'); }, 'primary')) : null,
-    ...movePanel(), h('div', { class: 'btns', style: { marginTop: '10px' } }, btn('Close', () => { moveSheetOpen = false; closeSheet(); })));
+    ...movePanel(), h('div', { class: 'btns', style: { marginTop: '10px' } }, btn('Close', () => closeSheet())));
+  window.__sheetClose = (reopening) => {
+    if (reopening) return;
+    moveSheetOpen = false;
+    if (c.autoDot && laserDot && app.machine.connected) toggleDot();
+  };
+  if (m.connected && c.autoDot && !laserDot && !app.run.active && !autoDotBusy) { autoDotBusy = true; toggleDot().finally(() => autoDotBusy = false); }
 }
+let autoDotBusy = false;
 function moveSheetRefresh() { if (moveSheetOpen && !$('#sheet').hidden) moveSheet(); }
 
 let framing = false;
@@ -615,7 +631,7 @@ async function runFrame(trace) {
       if (trace) await m.trace(job.hull, opts); else await m.frame(job.gbox, opts);
     } while (framing && c.frameRepeat && m.connected && !m.cancelFrame);
   } catch (e) { toast(e.message, true); try { await m.send('M5'); } catch (_) { } }
-  framing = false;
+  framing = false; laserDot = false;
 }
 async function stopFrame() {
   const m = app.machine;
@@ -869,7 +885,7 @@ async function startJob() {
     h('p', { class: 'hint warn' }, '⚠ Put on laser safety glasses. Check focus and that the material is flat. Stay with the machine.'),
     h('div', { class: 'btns' }, btn('Cancel', closeSheet), btn('▶ Start now', async () => {
       closeSheet();
-      app.run = { active: true, phase: c.transfer === 'upload' ? 'upload' : 'run', pct: 0 };
+      app.run = { active: true, phase: c.transfer === 'upload' ? 'upload' : 'run', pct: 0 }; laserDot = false;
       if (app.previewOn) togglePreview();
       setTab('run');
       try {
@@ -964,24 +980,30 @@ function menu() {
     h('button', { onclick: () => { closeSheet(); $('#fileProject').click(); } }, '📂 Open project file'),
     h('button', { onclick: () => { closeSheet(); exportGcode(); } }, '⬇ Save G-code (.nc)'),
     h('button', { onclick: () => { closeSheet(); settings(); } }, '⚙ Settings'),
+    h('button', { onclick: () => { closeSheet(); materialsSheet(); } }, '🪵 Material settings'),
     h('button', { onclick: () => { closeSheet(); presetsSheet(); } }, '★ My material presets'),
     h('button', { onclick: () => { closeSheet(); checkUpdate(true); } }, '⟳ Check for updates'),
     h('button', { onclick: () => { closeSheet(); help(); } }, '❓ Help'),
   ), h('p', { class: 'hint' }, 'Version ' + VERSION + (window.AndroidApp ? ' · app ' + (JSON.parse(window.AndroidApp.info() || '{}').version || '') : '')));
 }
-function saveCfg() { lsSet('cfg', app.cfg); app.machine.autoUnlock = app.cfg.autoUnlock; }
+function saveCfg() { lsSet('cfg', app.cfg); app.machine.autoUnlock = app.cfg.autoUnlock;
+if (!app.cfg.laserW) app.cfg.laserW = (MODELS[app.cfg.model] && MODELS[app.cfg.model].laser) || 10;
+setLaserClass(app.cfg.laserW);
+if (!app.cfg.mig1) { app.cfg.hasHoming = true; app.cfg.autoDot = true; app.cfg.mig1 = true; lsSet('cfg', app.cfg); } }
 function settings() {
   const c = app.cfg;
   const models = {}; Object.entries(MODELS).forEach(([k, v]) => models[k] = `${v.name} (${v.w}×${v.h})`);
   const n = (key, opts) => num(c[key], { ...opts, onChange: (v) => { c[key] = v; saveCfg(); editor.render(); } });
   openSheet('Settings',
     section('Machine',
-      row('Model', select(models, c.model, (v) => { c.model = v; if (v !== 'custom') { c.bedW = MODELS[v].w; c.bedH = MODELS[v].h; } saveCfg(); closeSheet(); settings(); editor.fit(); })),
+      row('Model', select(models, c.model, (v) => { c.model = v; if (v !== 'custom') { c.bedW = MODELS[v].w; c.bedH = MODELS[v].h; if (MODELS[v].laser) { c.laserW = MODELS[v].laser; setLaserClass(c.laserW); } } saveCfg(); closeSheet(); settings(); editor.fit(); })),
+      row('Laser module', select(Object.entries(LASER_CLASSES), c.laserW, (v) => { c.laserW = +v; setLaserClass(c.laserW); saveCfg(); renderPanel(); }), h('span', { class: 'hint' }, 'sets the material presets')),
       h('div', { class: 'grid2' }, field('Work area width mm', n('bedW', { min: 50, max: 2000 })), field('Work area height mm', n('bedH', { min: 50, max: 2000 }))),
       h('div', { class: 'grid2' }, field('Max S value ($30)', n('sMax', { min: 1, max: 10000 })), field('Overscan mm', n('overscan', { min: 0, max: 20, step: 0.5 }))),
       row('Engrave both ways', toggle(c.bidir, (v) => { c.bidir = v; saveCfg(); })),
       row('Auto-unlock alarm', toggle(c.autoUnlock, (v) => { c.autoUnlock = v; saveCfg(); })),
       row('Homing', toggle(c.hasHoming, (v) => { c.hasHoming = v; saveCfg(); }), h('span', { class: 'hint' }, 'machine has limit switches ($H)')),
+      row('Laser dot in Move', toggle(c.autoDot, (v) => { c.autoDot = v; saveCfg(); }), h('span', { class: 'hint' }, 'turn on the weak dot while the Move window is open')),
     ),
     section('Show where',
       row('Show with', seg([['laser', 'Blue laser (weak)'], ['pointer', 'Separate red pointer']], c.pointer ? 'pointer' : 'laser', (v) => { c.pointer = v === 'pointer'; saveCfg(); })),
@@ -996,6 +1018,29 @@ function settings() {
     section('Connection',
       h('div', { class: 'grid3' }, field('File name on engraver', h('input', { type: 'text', value: c.fileName, onchange: (e) => { c.fileName = e.target.value.replace(/[^\w.-]/g, '') || 'studio.nc'; saveCfg(); } })), field('BLE packet bytes', n('bleChunk', { min: 20, max: 500 })), field('Stream buffer', n('rxBuffer', { min: 32, max: 1024 }))),
     ),
+    h('div', { class: 'btns' }, btn('Close', closeSheet, 'primary')),
+  );
+}
+function materialsSheet() {
+  const c = app.cfg;
+  const opName = { fill: 'Engrave', line: 'Line', cut: 'Cut' };
+  const list = PRESETS[laserClass()];
+  const sel = app.selected();
+  const rows = list.map(p => h('li', {},
+    h('span', { class: 'nm' }, p.name),
+    h('span', { class: 'tag ' + (p.op === 'cut' ? 'cut' : p.op === 'line' ? 'line' : '') }, `${opName[p.op]} ${p.power}% · ${p.speed} · ×${p.passes}${p.air ? ' · air' : ''}`),
+    sel && (sel.type !== 'image' || p.op === 'fill') ? h('button', { title: 'Use for selected', onclick: () => {
+      if (sel.type !== 'image') sel.op = p.op;
+      Object.assign(sel.ops[p.op], { power: p.power, speed: p.speed, passes: p.passes }, p.interval ? { interval: p.interval } : {});
+      if (p.air && !c.air) { c.air = true; saveCfg(); }
+      sel._preview = null; app.commit(); app.changed(true); closeSheet(); toast('Applied to "' + (sel.name || sel.type) + '": ' + p.name);
+    } }, '✔') : null,
+  ));
+  openSheet('Material settings',
+    row('Laser module', select(Object.entries(LASER_CLASSES), c.laserW, (v) => { c.laserW = +v; setLaserClass(c.laserW); saveCfg(); materialsSheet(); })),
+    h('p', { class: 'hint' }, sel ? 'Tap ✔ to use a setting for the selected object.' : 'Select an object first to apply a setting with ✔. The same list is in the Object tab under "Material presets".'),
+    h('ul', { class: 'layers' }, ...rows),
+    h('p', { class: 'hint' }, 'Speeds are mm/min. 10 W and 20 W values are SculpFun\'s recommended settings; 5 W values come from SculpFun\'s S9 guide. They are starting points — focus, wood type and air assist change the result, so run 🧪 Material test (Run tab) for important jobs.'),
     h('div', { class: 'btns' }, btn('Close', closeSheet, 'primary')),
   );
 }

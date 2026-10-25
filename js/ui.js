@@ -85,12 +85,16 @@ export function toast(msg, err) {
 
 export function openSheet(title, ...content) {
   const s = document.getElementById('sheet'), c = document.getElementById('sheetCard');
+  if (window.__sheetClose) { const f = window.__sheetClose; window.__sheetClose = null; try { f(true); } catch (e) { } }
   c.innerHTML = '';
   c.append(h('h2', {}, title), ...content.flat(Infinity).filter(x => x != null && x !== false));
   s.hidden = false;
   s.onclick = (e) => { if (e.target === s) closeSheet(); };
 }
-export function closeSheet() { document.getElementById('sheet').hidden = true; }
+export function closeSheet() {
+  document.getElementById('sheet').hidden = true;
+  const f = window.__sheetClose; window.__sheetClose = null; if (f) try { f(); } catch (e) { }
+}
 
 // In-page replacements for confirm()/prompt() (those are blocked in some app views)
 export function ask(message, okLabel = 'OK', danger = false) {
