@@ -244,10 +244,25 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 31) {
             if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) need.add(Manifest.permission.BLUETOOTH_CONNECT);
             if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) need.add(Manifest.permission.BLUETOOTH_SCAN);
-        } else {
-            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) need.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+        // Like the original SculpFun app: location permission is needed to find Bluetooth devices on many phones
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            need.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            need.add(Manifest.permission.ACCESS_COARSE_LOCATION);
         }
         if (!need.isEmpty()) requestPermissions(need.toArray(new String[0]), REQ_PERM);
+    }
+
+    public boolean isLocationEnabled() {
+        try {
+            android.location.LocationManager lm = (android.location.LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            if (Build.VERSION.SDK_INT >= 28) return lm.isLocationEnabled();
+            return lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) || lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER);
+        } catch (Exception e) { return true; }
+    }
+
+    public void openLocationSettings() {
+        runOnUiThread(() -> { try { startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)); } catch (Exception ignored) { } });
     }
 
     @Override

@@ -51,6 +51,14 @@ public class BtBridge {
         return true;
     }
 
+    private boolean hasScanPerm() {
+        boolean loc = act.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        if (Build.VERSION.SDK_INT >= 31) {
+            return loc && act.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED;
+        }
+        return loc;
+    }
+
     private void emit(JSONObject o) { act.sendToJs("window.__bt && window.__bt(" + o.toString() + ")"); }
 
     private void emit(String type, String key, Object val) {
@@ -67,16 +75,33 @@ public class BtBridge {
         if (adapter == null) return "unsupported";
         if (!hasPerm()) return "noperm";
         if (!adapter.isEnabled()) return "off";
-        return connected ? "connected" : "ready";
+        if (connected) return "connected";
+        if (!hasScanPerm()) return "noscanperm";
+        if (!act.isLocationEnabled()) return "noloc";
+        return "ready";
     }
 
     @JavascriptInterface
     public void requestSetup() {
         act.runOnUiThread(() -> {
-            if (!hasPerm()) { act.requestBtPermissions(); return; }
+            if (!hasPerm() || !hasScanPerm()) {
+                // permanently denied? open app settings so the user can allow it
+                boolean ask = false;
+                for (String p : new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Build.VERSION.SDK_INT >= 31 ? Manifest.permission.BLUETOOTH_SCAN : Manifest.permission.ACCESS_FINE_LOCATION})
+                    if (act.checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED && (act.shouldShowRequestPermissionRationale(p) || !act.getSharedPreferences("app", Context.MODE_PRIVATE).getBoolean("asked_" + p, false))) ask = true;
+                if (ask || !hasPerm()) {
+                    act.getSharedPreferences("app", Context.MODE_PRIVATE).edit().putBoolean("asked_" + Manifest.permission.ACCESS_FINE_LOCATION, true).putBoolean("asked_" + Manifest.permission.BLUETOOTH_SCAN, true).apply();
+                    act.requestBtPermissions();
+                } else {
+                    try { act.startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + act.getPackageName()))); } catch (Exception ignored) { }
+                }
+                return;
+            }
             if (adapter != null && !adapter.isEnabled()) {
                 try { act.startActivity(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)); } catch (Exception ignored) { }
+                return;
             }
+            if (!act.isLocationEnabled()) act.openLocationSettings();
         });
     }
 
@@ -101,14 +126,16 @@ public class BtBridge {
     public void startScan() {
         act.runOnUiThread(() -> {
             if (adapter == null) return;
-            if (!hasPerm() || (Build.VERSION.SDK_INT >= 31 && act.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)) {
-                act.requestBtPermissions(); emit("scanDone", null, null); return;
+            if (!hasPerm() || !hasScanPerm()) {
+                act.requestBtPermissions(); emit("scanError", "message", "Allow \"Nearby devices\" and \"Location\" for Loki Laser, then search again."); return;
             }
+            if (!adapter.isEnabled()) { emit("scanError", "message", "Bluetooth is off. Turn it on and search again."); return; }
+            if (!act.isLocationEnabled()) { act.openLocationSettings(); emit("scanError", "message", "Turn on Location (GPS) — Android needs it to find Bluetooth devices. Then search again."); return; }
             stopScanInternal();
             scanReceiver = new BroadcastReceiver() {
                 @Override public void onReceive(Context c, Intent i) {
                     String a = i.getAction();
-                    if (BluetoothDevice.ACTION_FOUND.equals(a)) {
+                    if (BluetoothDevice.ACTION_FOUND.equals(a) || BluetoothDevice.ACTION_NAME_CHANGED.equals(a)) {
                         BluetoothDevice d = i.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
                         if (d == null) return;
                         try {
@@ -116,6 +143,9 @@ public class BtBridge {
                             o.put("type", "found");
                             o.put("name", d.getName() == null ? "" : d.getName());
                             o.put("address", d.getAddress());
+                            String nm = i.getStringExtra(BluetoothDevice.EXTRA_NAME);
+                            if (nm != null && nm.length() > 0) o.put("name", nm);
+                            o.put("rssi", i.getShortExtra(BluetoothDevice.EXTRA_RSSI, (short) 0));
                             emit(o);
                         } catch (Exception ignored) { }
                     } else if (BluetoothAdapter.ACTION_DISCOVERY_FINISHED.equals(a)) {
@@ -125,10 +155,13 @@ public class BtBridge {
             };
             IntentFilter f = new IntentFilter();
             f.addAction(BluetoothDevice.ACTION_FOUND);
+            f.addAction(BluetoothDevice.ACTION_NAME_CHANGED);
             f.addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED);
             if (Build.VERSION.SDK_INT >= 33) act.registerReceiver(scanReceiver, f, Context.RECEIVER_EXPORTED);
             else act.registerReceiver(scanReceiver, f);
-            try { adapter.startDiscovery(); } catch (Exception e) { emit("scanDone", null, null); }
+            boolean ok = false;
+            try { ok = adapter.startDiscovery(); } catch (Exception e) { ok = false; }
+            if (!ok) emit("scanError", "message", "Android refused to search. Check that Location and Nearby-devices permissions are allowed for Loki Laser.");
         });
     }
 

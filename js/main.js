@@ -697,28 +697,62 @@ function androidPicker() {
   }
   let devs = [];
   try { devs = JSON.parse(BT.devices()); } catch (e) { }
-  devs.sort((a, b) => (/sculpfun/i.test(b.name) ? 1 : 0) - (/sculpfun/i.test(a.name) ? 1 : 0));
-  const item = (d) => h('li', { onclick: () => { BT.stopScan(); closeSheet(); connect('android', d); } },
-    h('span', {}, /sculpfun/i.test(d.name) ? '🔥' : '🔵'), h('span', { class: 'nm' }, d.name || d.address),
-    h('span', { class: 'tag' }, d.paired ? 'paired' : 'new'));
+  const isSF = (n) => /sculp|sf-|icube|ts1/i.test(n || '');
+  devs.sort((a, b) => (isSF(b.name) ? 1 : 0) - (isSF(a.name) ? 1 : 0));
+  const pick = (d) => { BT.stopScan(); off && off(); closeSheet(); connect('android', d); };
+  const item = (d) => {
+    const nm = h('span', { class: 'nm' }, d.name || ('Unknown device ' + d.address));
+    const ic = h('span', {}, isSF(d.name) ? '🔥' : '🔵');
+    const li = h('li', { onclick: () => pick({ name: li._name || d.address, address: d.address }) }, ic, nm, h('span', { class: 'tag' }, d.paired ? 'paired' : 'new'));
+    li._name = d.name; li._nm = nm; li._ic = ic;
+    return li;
+  };
+  const warn = h('div');
+  const showWarn = () => {
+    warn.innerHTML = '';
+    const s2 = BT.state();
+    if (s2 === 'noscanperm') warn.append(h('div', { class: 'hint warn' }, 'To search, Android needs "Nearby devices" and "Location" permission for Loki Laser (the SculpFun app needs the same).'), btn('Allow', () => BT.requestSetup(), 'primary'));
+    else if (s2 === 'noloc') warn.append(h('div', { class: 'hint warn' }, 'Location (GPS) is off. Android only finds Bluetooth devices when Location is on.'), btn('Turn on Location', () => BT.requestSetup(), 'primary'));
+  };
+  showWarn();
   const list = h('ul', { class: 'layers' }, ...devs.map(item));
   const found = h('ul', { class: 'layers' });
   const status = h('div', { class: 'hint' });
-  const seen = new Set(devs.map(d => d.address));
+  const items = new Map();
+  devs.forEach(d => items.set(d.address, null));
   let off = null;
-  const scanBtn = btn('🔍 Search for nearby devices', () => {
+  const doScan = () => {
+    showWarn();
     status.textContent = 'Searching… (about 12 seconds)';
     off && off();
     off = onBtEvent((ev) => {
-      if (ev.type === 'found' && !seen.has(ev.address)) { seen.add(ev.address); found.append(item({ name: ev.name || ev.address, address: ev.address, paired: false })); }
-      if (ev.type === 'scanDone') { status.textContent = found.childNodes.length ? 'Search finished. Tap your engraver (its name starts with "SculpFun").' : 'Nothing new found. Is the engraver on?'; off && off(); }
+      if (ev.type === 'found') {
+        if (items.has(ev.address)) {
+          const li = items.get(ev.address);
+          if (li && ev.name && !li._name) { li._name = ev.name; li._nm.textContent = ev.name; li._ic.textContent = isSF(ev.name) ? '🔥' : '🔵'; if (isSF(ev.name)) found.prepend(li); }
+          return;
+        }
+        const li = item({ name: ev.name, address: ev.address, paired: false });
+        items.set(ev.address, li);
+        if (isSF(ev.name)) found.prepend(li); else found.append(li);
+      }
+      if (ev.type === 'scanError') { status.textContent = ev.message; showWarn(); off && off(); }
+      if (ev.type === 'scanDone') {
+        status.textContent = found.childNodes.length ? 'Search finished. Tap your engraver (name starts with "SculpFun").'
+          : 'Nothing found. Make sure the SculpFun app is fully closed (swipe it away) — while it is connected, the engraver is hidden. Then turn the engraver off and on and search again.';
+        off && off();
+      }
     });
     BT.startScan();
-  });
-  openSheet('Choose your engraver',
-    devs.length ? h('div', {}, h('div', { class: 'hint' }, 'Paired devices'), list) : h('p', { class: 'hint' }, 'No paired devices yet. Tap Search.'),
+  };
+  const scanBtn = btn('🔍 Search for nearby devices', doScan);
+  openSheet('Choose your engraver', warn,
+    devs.length ? h('div', {}, h('div', { class: 'hint' }, 'Paired devices'), list) : null,
     h('div', { class: 'btns', style: { margin: '8px 0' } }, scanBtn), status, found,
+    h('div', { class: 'hint' }, 'Tip: close the SculpFun app completely first. The engraver can only be connected to one app at a time.'),
     h('div', { class: 'btns', style: { marginTop: '10px' } }, btn('Close', () => { BT.stopScan(); off && off(); closeSheet(); })));
+  if (!devs.some(d => isSF(d.name))) setTimeout(doScan, 300);
+  window.__btPermRefresh = showWarn;
 }
 
 async function connect(kind, dev) {
@@ -1127,6 +1161,7 @@ async function checkUpdate(manual) {
 }
 
 // ---------------- Android app events ----------------
+onBtEvent((ev) => { if (ev.type === 'perm' && window.__btPermRefresh) window.__btPermRefresh(); });
 window.__appEvent = (ev) => {
   const bar = $('#updateBar');
   if (ev.type === 'updateReady') {
@@ -1137,6 +1172,7 @@ window.__appEvent = (ev) => {
     bar.firstChild.textContent = 'New app version ' + ev.version + '. ';
     $('#updateNow').textContent = 'Download'; $('#updateNow').onclick = () => { window.AndroidApp.installUpdate(); bar.hidden = true; }; bar.hidden = false;
   } else if (ev.type === 'upToDate') toast('You have the latest version');
+  else if (ev.type === 'resume' && window.__btPermRefresh && !$('#sheet').hidden) window.__btPermRefresh();
   else if (ev.type === 'updateError') toast('Could not check for updates: ' + ev.message, true);
 };
 window.__back = () => {
